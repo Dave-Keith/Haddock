@@ -1,0 +1,112 @@
+---
+title: "Haddock S-R models"
+author: "David Keith"
+date: "11/14/2021"
+output:
+  bookdown::word_document2: default
+  #bookdown::pdf_document2: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999)
+library(tidyverse)
+library(cowplot)
+had <- readxl::read_xlsx("D:/Github/Haddock/Data/BS_Haddock.xlsx",sheet = "Haddock")
+cod <- readxl::read_xlsx("D:/Github/Haddock/Data/BS_Haddock.xlsx",sheet = "Cod")
+had <- had %>% dplyr::select(Year,`R(age 3)`,SSB,TSB,`Fbar(4-7)`)
+cod <- cod %>% dplyr::select(Year,`R(age 3)`,SSB,TSB,`Fbar(5-10)`)
+names(had) <- c("year","rec","ssb",'tsb','f')
+names(cod) <- c("year","rec","ssb",'tsb','f')
+had$stock <- "Haddock"
+cod$stock <- "Cod"
+
+```
+
+## Thoughts
+
+So our first thought was a simple stock-recruitment model using the linearization of the Ricker SR model, so
+
+$$ log\left(\frac{Rec}{SSB}\right) = SSB + \epsilon_i$$
+Of course our starting place is the largest Haddock Stock in the world and might as well include it's wingman the not largest Cod Stock in the world as our starting place. First, we need to align the data properly.  For both stocks the recruits are age 3, so the recruits in year t came from the SSB in t-3. I've gone with the recruits in year t are age 0 (say 1950), so they are 3 years old in 1953, thus the 1950 SSB year class results in recruits we see in 1953.
+
+
+```{r align, echo =T,fig.width=11,fig.height=5}
+# First up, we need to offset the Recruits to line up with SSB.  For both Haddock and Cod 
+had$rec <- c(had$rec[4:nrow(had)],NA,NA,NA)
+cod$rec <- c(cod$rec[4:nrow(cod)],NA,NA,NA)
+had$ssb.prop <- had$ssb/max(had$ssb)
+cod$ssb.prop <- cod$ssb/max(cod$ssb)
+
+# Now combine the two so we can make some simple plots and maybe fancy models later
+dat <- bind_rows(had,cod)
+# Get the Rec/SSB value
+dat$rec.ssb <- dat$rec/dat$ssb
+dat$log.r.ssb <- log(dat$rec.ssb)
+dat <- dat[!is.na(dat$rec),]
+# Now we can plot the Rec vs SSB
+theme_set(theme_bw())
+```
+
+
+
+The Recruit-SSB relationships look as awful here as they always does (Figure \@ref(fig:r-ssb-plot)).  
+
+```{r r-ssb-plot, message=F,echo =F,fig.width=11,fig.height=5,fig.cap= "Recruits vs SSB for the world largest Haddock stock and a Cod stock also found in the Barents Sea."}
+# Recruits vs SSB
+p1 <- ggplot(dat) + geom_text(aes(y=rec, x= `ssb`,label=substr(year,3,4)),size=2) + facet_wrap(~stock,scales = 'free') + xlab("SSB") + ylab("Recruits")
+p1
+
+```
+
+But the linearization of the relationship does reveal more of what is going on at lower SSB.  What we see is that around 40% of the maximum SSB the variance blows up (Figure \@ref(fig:rssb-ssb-plot)).  
+
+```{r rssb-ssb-plot, echo =F,fig.width=11,fig.height=5,message=F,fig.cap = "Recruits/SSB (log scale) vs SSB, Linear model fit on log(10) scale"}
+
+# Now the Rec/SSB vs SSB figure, with a line of best fit, not ugly at all....
+p2 <- ggplot(dat,aes(y=rec.ssb, x= ssb)) + geom_text(aes(label=substr(year,3,4)),size=2) + scale_y_log10() + facet_wrap(~stock,scales = 'free') + xlab("SSB") + ylab("Rec/SSB") + geom_smooth(method='lm')
+p2
+```
+
+From this, I think the linear relationship holds pretty well at lower SSB, it simply that there is huge variability.  To look a bit more at this, I fit another linear model to the data, but here I constrained it to fit to the data in which SSB was > 0.2 of the Maximum SSB Figure (\@ref(fig:rssb-ssb-lt20)). The fit is very similar doing this, which to me suggests we aren't seeing any evidence higher or lower than expected compensation at low SSB for these stocks.
+
+```{r rssb-ssb-lt20, echo =F,fig.width=11,fig.height=5,message=F,fig.cap= "Recruits/SSB (log scale) vs SSB with SSB as a proportion of maximum SSB.  Linear model fit to data > 0.2 of maximum SSB."}
+
+# The Rec/SSB using the only > 20% data...
+p3 <- ggplot(dat %>% dplyr::filter(ssb.prop >= 0.2),aes(y=rec.ssb, x= ssb.prop)) +  scale_y_log10() + geom_text(aes(label=substr(year,3,4)),size=2) +
+  geom_point(data=dat %>% dplyr::filter(ssb.prop < 0.2),aes(y=rec.ssb, x= ssb.prop)) + facet_wrap(~stock,scales = 'free') + xlab("SSB") + ylab("Rec/SSB") + geom_smooth(method='lm') 
+p3
+
+```
+
+So now we can formally model the stock-recruit relationship.  For the moment I'll subset into the two stocks, when we get more data we may want to make this a hierarchial model (would probably move to Bayesian to do this). Using a Gaussian model with a log link on the rec/ssb response we can really see this increased variance at low SSB for Cod in the residuals from the model, while the elevated variance issue is still there for Haddock is certainly is less dramatic than observed with Cod Figure \@ref(fig:mod-n-plot)).
+
+```{r mod-n-plot, echo =T,fig.width=11,fig.height=5}
+# The cod model
+cod.mod <- glm(rec.ssb ~ ssb,data= dat %>% dplyr::filter(stock == 'Cod'),family =gaussian(link = "log"))
+summary(cod.mod)
+
+# The Haddock model
+had.mod <- glm(rec.ssb ~ ssb,data= dat %>% dplyr::filter(stock == 'Haddock'),family =gaussian(link = "log"))
+summary(had.mod)
+
+# Now combine the residuals and plot them up.
+cod.resids <- residuals(cod.mod)
+had.resids <- residuals(had.mod)
+dat$resids <- c(had.resids,cod.resids)
+
+p4 <- ggplot(dat,aes(y=resids, x= ssb.prop)) + geom_text(aes(label=substr(year,3,4)),size=2) +
+      facet_wrap(~stock,scales = 'free') + xlab("SSB") + ylab("Resids")  + geom_hline(yintercept = 0,linetype=2,color='grey')
+p4
+
+```
+
+So having done this, the two lines of exploration I have when looking at the Stock Recruitment relationship are
+
+  - Following loosely on Fogerty, when SSB is below some threshold (40%) is the variability in the stock recruitment relationship higher for one species, and do we see any differences between the NW and NE Atlantic stocks.
+
+  - My other thought is around the S-R relationship at low abundance itself.  If we fit the S-R model and excluded low SSB values (e.g. < 20%), does the S-R relationship change in some direction for either species or between the NW and NE Atlantic stocks?  I've kinda explored this before and mostly seemed that the NW Atlantic stocks tended to have a weaker S-R relationship at low abundance, than NE Atlantic stocks, but I think we could unpack that idea more here using the variability angle.
+
+  - Looking at these results, there is probably a life-history strategy here that we could discuss.  Basically, when abundance declines the stocks have years that are much worse in terms of per-capita recruitment, but they also have years in which per-capita recruitment is off the charts good. So really, the stocks are 'going for' a home-run shot at low abudance to try and get out of the rut.  A run of a few bad years is fine, they can live with slowly declining if every once in a while you get that home-run recruitment event that can kick the population back up to some better state. That compares to the 'good times' where you pump in a more steady flow of recruits over time (perhaps have a buffer of some sort that enables stock to average across environmental conditions).
+  
+  - Of course problem with that story for Cod is that there is an interesting temporal story there and the stock seems to have recovered in a slow and steady way since the 1980s (perhaps due to lower F) without any spectacular recruitment events.
