@@ -39,21 +39,21 @@ dat$alpha <- NA
 dat$alpha.sd <- NA
 dat$resids <- NA
 
-# Now I need to get the recruits to all be 1 year olds....
+# So we want to get the recruits to be the same age for each stock comparison, only a coupe of stocks aren't aligned as is.
 # The NS Haddock is Age 0, so multiply by 0.2
 m <- 0.2
 dat$recruits[dat$stock == "Haddock North Sea"] <- (1-m) * dat$recruits[dat$stock == "Haddock North Sea"]
-# Irish Cod is Age 0so we need to step it back two years to get to 1 year olds
+# Irish Cod is Age 0 so we need to get them to 1 year olds
 dat$recruits[dat$stock == "Haddock Irish Sea"] <- (1-m) * dat$recruits[dat$stock == "Haddock Irish Sea"]
 
-# Icelandic Cod is Age 3 so we need to step it back two years to get to 1 year olds
+# Icelandic Cod is Age 3 so we need to step it back one year to get to the 2 year olds and match Haddock
 dat$recruits[dat$stock == "Cod Icelandic"] <- dat$recruits[dat$stock == "Cod Icelandic"] / ((1-m)*(1-m)) 
-# Icelandic Haddock is Age 2, so just one year back
-dat$recruits[dat$stock == "Haddock Icelandic"] <- dat$recruits[dat$stock == "Haddock Icelandic"] / (1-m) 
-# Barents Sea Haddock is Age 3, so two steps back
-dat$recruits[dat$stock == "Haddock Barents Sea"] <- dat$recruits[dat$stock == "Haddock Barents Sea"] / ((1-m)*(1-m)) 
-# Barents Sea Cod is also Age 3, so two steps back
-dat$recruits[dat$stock == "Cod Barents Sea"] <- dat$recruits[dat$stock == "Cod Barents Sea"] / ((1-m)*(1-m)) 
+# Icelandic Haddock is Age 2, so don't do anything
+#dat$recruits[dat$stock == "Haddock Icelandic"] <- dat$recruits[dat$stock == "Haddock Icelandic"] / (1-m) 
+# Barents Sea Haddock is Age 3, so don't do anything as Cod is also age 3
+#dat$recruits[dat$stock == "Haddock Barents Sea"] <- dat$recruits[dat$stock == "Haddock Barents Sea"] / ((1-m)*(1-m)) 
+# Barents Sea Cod is also Age 3, so do nothing.
+#dat$recruits[dat$stock == "Cod Barents Sea"] <- dat$recruits[dat$stock == "Cod Barents Sea"] / ((1-m)*(1-m)) 
 
 # All other NE Atlantic stocks and all of the NW Atlantic stocks are Age 1 recruits
 
@@ -113,6 +113,8 @@ p1 <- ggplot(dat %>% dplyr::filter(region == "Northwest Atlantic")) + geom_line(
 p.rec.ts <- plot_grid(p0,p1,nrow=2,rel_heights = c(2,1))
 p.rec.ts
 ```
+
+
 
 Next up was a simple stock-recruitment model using the linearization of the Ricker SR model.
 
@@ -218,32 +220,6 @@ dat.mod$UCI <- dat.mod$alpha + 1.96 *dat.mod$alpha.sd
 
 ```
 
-```{r sr-resid-plot,fig.width=11,fig.height=11,message=F,fig.cap = "Residuals from the Ricker Stock recruitment model."}
-
-p <- ggplot(dat.mod %>% dplyr::filter(region == "Northeast Atlantic"),aes(y=resids, x= year,colour = Period,linetype = Species)) +    
-              geom_line() + 
-              facet_wrap(~location ,ncol=3) + xlab("") + ylab("Residuals")  + 
-              scale_color_manual(values = cols)  + 
-              geom_hline(yintercept = 0, color='grey',linetype = 'dashed')+
-              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10),labels = NULL) +
-              theme(axis.title.y = element_text(hjust=0.25),
-                    legend.position = c(0.85, 0.25), 
-                    legend.title.align=1,
-                    legend.text.align = 1,
-                    legend.title = element_text(size=16),
-                    legend.text = element_text(size=12),
-                    #legend.key.size = unit(3,"line"),
-                    legend.key.width = unit(3,"cm")) 
-
-p1 <- ggplot(dat.mod %>% dplyr::filter(region=="Northwest Atlantic"),aes(y=resids, x= year,colour = Period,linetype = Species)) +
-              geom_line() + geom_hline(yintercept = 0, color='grey',linetype = 'dashed')+
-              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
-              facet_wrap(~location ,ncol=3) + xlab("Year") + ylab("")  + 
-              scale_color_manual(values = cols) + theme(legend.position = "none")
-
-sr.resid.plt <- plot_grid(p,p1,nrow=2,rel_heights = c(2,1))
-sr.resid.plt
-```
 
 ```{r sr-alpha-plot}
 
@@ -286,34 +262,6 @@ p
 
 ```
 
-
-
-First we look at the residuals from the Stock Recruitment relationship (Figure \@ref(fig:ricker-resids)).  
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-```{r ricker-resids, message=F,echo =F,fig.width=11,fig.height=11,fig.cap= "Recruits vs SSB for the world largest Haddock stock and some other less important things."}
-# Recruits vs SSB
-
-p1 <- ggplot(dat %>% dplyr::filter(region == "Northeast Atlantic")) + geom_text(aes(y=recruits, x= ssb,colour = Period,label=substr(year,3,4)),size=2) + facet_wrap(~  stock ,scales = 'free',ncol=3) + xlab("SSB") + ylab("Recruits")  + scale_color_manual(values = cols) 
-# Now the NW Atlantic stocks
-p2 <-  ggplot(dat %>% dplyr::filter(region == "Northwest Atlantic")) + geom_text(aes(y=recruits, x= ssb,colour = Period,label=substr(year,3,4)),size=2) + facet_wrap(~  stock ,scales = 'free',ncol=3) + xlab("SSB") + ylab("Recruits")  + scale_color_manual(values = cols) 
-# Now combine ito p_awesome
-p.ricker.resid <- plot_grid(p1,p2,nrow=2,rel_heights = c(2,1))
-p.ricker.resid
-```
 
 
 From this, I think the linear relationship holds pretty well at lower SSB for these stocks, but for Cod we have really no evidence of an S-R relationship for half the stocks.  So, I did something I like doing and split the data up, this time I split it at 0.4 of maximum SSB and fit linear models for each half of the data to see if anything interesting popped  (Figure \@ref(fig:rssb-ssb-lt40)), obviously some of these look a bit silly. But that triggered me to think of a piecewise regression model for the data, which did more what I was hoping for (Figure \@ref(fig:rssb-ssb-pw)). It's an interesting mix of responses, I think all the 'breakpoints' are < 50% of max SSB, but that could be an artifact of having most of the data at < 50% of maximum SSB, or maybe it is something biologically interesting?  The RAM idea of higher variability in recruitment near edge of their range might be in here if I squint really hard, maybe?
@@ -404,12 +352,46 @@ p
 
 
 ```
+# Appendix
 
-So having done this, most of what I was thinking about when looking at the Barents Sea stocks is probably off to the bin.  The two obvious bits I think this could inform
 
-1:  Higher variability in recruitment for Haddock.  I'm not sure if the S-R methods are necessary to pull this info out.
+```{r sr-resid-plot,fig.width=11,fig.height=11,message=F,fig.cap = "Residuals from the Ricker Stock recruitment model."}
 
-2:  Might RAM's recruitment variability along edges be tested here, I think that may be worth exploring more.
+p <- ggplot(dat.mod %>% dplyr::filter(region == "Northeast Atlantic"),aes(y=resids, x= year,colour = Period,linetype = Species)) +    
+              geom_line() + 
+              facet_wrap(~location ,ncol=3) + xlab("") + ylab("Residuals")  + 
+              scale_color_manual(values = cols)  + 
+              geom_hline(yintercept = 0, color='grey',linetype = 'dashed')+
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10),labels = NULL) +
+              theme(axis.title.y = element_text(hjust=0.25),
+                    legend.position = c(0.85, 0.25), 
+                    legend.title.align=1,
+                    legend.text.align = 1,
+                    legend.title = element_text(size=16),
+                    legend.text = element_text(size=12),
+                    #legend.key.size = unit(3,"line"),
+                    legend.key.width = unit(3,"cm")) 
 
-Let's check to see if the results of the S-R models are the same as what Fogarety made.  Fogarety made point that cod produce more rec/ssb at low abundance, so check data back to his years and see if we get same. Let's do a 2 period thing and see what difference is.  Perhaps break point being where Fogarety break point is.
-Look at autocorrelation in the residual time series, we getting runs of good/bad years?
+p1 <- ggplot(dat.mod %>% dplyr::filter(region=="Northwest Atlantic"),aes(y=resids, x= year,colour = Period,linetype = Species)) +
+              geom_line() + geom_hline(yintercept = 0, color='grey',linetype = 'dashed')+
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+              facet_wrap(~location ,ncol=3) + xlab("Year") + ylab("")  + 
+              scale_color_manual(values = cols) + theme(legend.position = "none")
+
+sr.resid.plt <- plot_grid(p,p1,nrow=2,rel_heights = c(2,1))
+sr.resid.plt
+```
+
+
+First we look at the residuals from the Stock Recruitment relationship (Figure \@ref(fig:ricker-resids)).  
+
+```{r ricker-resids, message=F,echo =F,fig.width=11,fig.height=11,fig.cap= "Recruits vs SSB for the world largest Haddock stock and some other less important things."}
+# Recruits vs SSB
+
+p1 <- ggplot(dat %>% dplyr::filter(region == "Northeast Atlantic")) + geom_text(aes(y=recruits, x= ssb,colour = Period,label=substr(year,3,4)),size=2) + facet_wrap(~  stock ,scales = 'free',ncol=3) + xlab("SSB") + ylab("Recruits")  + scale_color_manual(values = cols) 
+# Now the NW Atlantic stocks
+p2 <-  ggplot(dat %>% dplyr::filter(region == "Northwest Atlantic")) + geom_text(aes(y=recruits, x= ssb,colour = Period,label=substr(year,3,4)),size=2) + facet_wrap(~  stock ,scales = 'free',ncol=3) + xlab("SSB") + ylab("Recruits")  + scale_color_manual(values = cols) 
+# Now combine ito p_awesome
+p.ricker.resid <- plot_grid(p1,p2,nrow=2,rel_heights = c(2,1))
+p.ricker.resid
+```
