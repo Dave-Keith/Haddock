@@ -3,12 +3,11 @@
 .RData
 .Ruserdata
 
+archive
+
+
 .Rproj
 .Rhistory
 .Rhistory
-Revisions
-Data/Raw
-References
-scripts/archive
-*.docx
-*.xlsx
+
+
