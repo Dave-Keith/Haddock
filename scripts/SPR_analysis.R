@@ -220,12 +220,14 @@ sbpr.dk <- function (age = NULL, ssbwgt = NULL, partial = NULL, pmat = pmat,
     # This is cumulative survival of cohort, I believe this is at start of each year as it doesn't account for the proportion of the year (pF and pM), 
     # The exponent part is from N_t = N_(t-1) in Gabriel, taking the cumulative product gets us to the proportion of the population left in the corhort
     data$S <- cumprod(exp(-(data$partial * F + data$M)))
-    # This loops just makes a vector that is S offset by a year, so this sets us up to know what proportion of the population is still kicking around at the start of the year
+    # This loops just makes a vector that is S offset by an age class, 
+    # so this sets us up to know what proportion of the population in each age class is kicking around at the start of the year
     data$psb[1] <- 1
     for (y in 2:len) {
       data$psb[y] <- data$S[y - 1]
     }
-    # So the spawner per recruit is proportion of population left at start of the year, * by proportion that dies during the year * average individual weight in age class * proprotion mature in age class
+    # So the spawner biomass per recruit in each age class is proportion of the age class left at start of the year, * by proportion that dies before spawning 
+    #  times the average individual weight in age class * proprotion mature in age class
     # This actually makes sense :-)
     data$SPR <- data$psb * data$SB * data$ssbwgt * data$pmat
     # Then you add that up for each age class and you have the lifetime contribution of Recruits for each spawner

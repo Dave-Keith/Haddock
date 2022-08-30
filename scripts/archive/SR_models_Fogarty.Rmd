@@ -1,0 +1,1799 @@
+---
+title: "Haddock S-R models"
+author: "David Keith"
+date: "11/14/2021"
+output:
+  bookdown::word_document2:
+    fig_caption: yes
+    number_sections: false
+  fontsize: 12pt
+  sansfont: Liberation Sans
+  mainfont: Liberation Sans
+  language: english
+  bookdown::html_document2: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999)
+library(tidyverse)
+library(cowplot)
+library(lme4)
+library(arm)
+library(mgcv)
+theme_set(theme_bw(base_size = 14))
+# Load in the data.
+dat <- readxl::read_xlsx("D:/Github/Haddock/Data/Stock_recruit_long_all_adj.xlsx",sheet = "data")
+spr.dat <- readRDS(file = "D:/Github/Haddock/Data/spr_results.rds")
+# Get the Rec/SSB value
+dat$rec.ssb <- dat$recruits/dat$ssb
+dat$log.r.ssb <- log(dat$rec.ssb)
+# Get the maximum SSB for each stock, tidyverse mutate is so smart here...
+dat <- dat %>% dplyr::group_by(Stock) %>% dplyr::mutate (max.ssb= max(ssb))
+dat$ssb.prop <- dat$ssb/dat$max.ssb
+dat <- as.data.frame(dat)
+dat <- dat %>% dplyr::group_by(Stock) %>% dplyr::mutate(rssb.stan = as.numeric(scale(rec.ssb)),
+                                                        log.rssb.stan = as.numeric(scale(log.r.ssb)))
+dat$l.rec <- log10(dat$recruits)
+dat$Period <- "Pre 1993"
+dat$Period[dat$year >= 1993] <- "Recent"
+dat$Period <- as.factor(dat$Period)
+cols <- c("firebrick1","darkblue")
+lty <- c("solid","dashed")
+dat$alpha <- NA
+dat$alpha.sd <- NA
+dat$resids <- NA
+dat$r2 <- NA
+
+
+# Lets just stick with the most recently assessed.  
+dat <- dat %>% dplyr::filter(Assessment == 'Current')
+# And we'll toss the W of Scotland and the combo WoS + NS Stocks as there is no Haddock Stock to match.
+dat <- dat %>% dplyr::filter(!Stock %in% c("Cod North Sea + W. of Scot.","Cod West of Scotland"))
+# These are ordered for Figures 1-3, I think we keep that order as it is vaguely spatial in nature
+dat$Stock <- factor(dat$Stock,levels = c("Haddock Icelandic","Cod Icelandic","Haddock  Faroese","Cod Faroese","Haddock Barents Sea","Cod Barents Sea" ,
+                                         "Haddock Irish Sea","Cod Irish Sea","Haddock North Sea","Cod North Sea",
+                                         "Haddock Eastern Scotian Shelf","Cod Eastern Scotian Shelf","Haddock Western Scotian Shelf","Cod Western Scotian Shelf",
+                                         "Haddock Eastern Georges Bank" , "Cod Eastern Georges Bank"))
+
+
+dat$Location[dat$Location=="Icelandic"] <- "Iceland"
+
+dat$Location <- factor(dat$Location,levels = c("Iceland","Faroese","Barents Sea",
+                                               "Irish Sea","North Sea",
+                                               "Eastern Georges Bank", "Western Scotian Shelf","Eastern Scotian Shelf"))
+
+# Removing that crazy Haddock point in 2013 for WSS Haddock does nothing to the fit, which is bizarre, but it matches expecations from the rest of the data somehow?
+#dat <- dat[!(dat$Stock == "Haddock Western Scotian Shelf" & dat$year == 2013),]
+
+# Now we can run some simply analysis to get some numbers for the results.
+# Frist to compare the means of the time series for SSB and recruits in each Period.
+pre.med <- dat %>% dplyr::filter(Period == "Pre 1993") %>% dplyr::group_by(Stock,Region,Species,.drop=F) %>% dplyr::summarise(med.ssb = median(ssb),
+                                                                         med.rec = median(recruits))
+
+recent.med <- dat %>% dplyr::filter(Period == "Recent") %>%dplyr::group_by(Stock,Region,Species,.drop=F) %>% dplyr::summarise(med.ssb = median(ssb),
+                                                                         med.rec = median(recruits))
+
+# Need to give Haddock Irish Sea levels so it is in here...
+pre.med$Region[pre.med$Stock == "Haddock Irish Sea"] <- "Northeast Atlantic"
+pre.med$Species[pre.med$Stock == "Haddock Irish Sea"] <- "Haddock"
+
+# Overall trend
+ssb.comp <- 100-100*signif(mean(recent.med$med.ssb/pre.med$med.ssb,na.rm=T),digits=2)
+r.comp <- 100-100*signif(mean(recent.med$med.rec/pre.med$med.rec,na.rm=T),digits=2)
+
+# Cod vs Haddock comparisons
+recent.cod <- recent.med %>% dplyr::filter(Species == "Cod")
+recent.had <- recent.med %>% dplyr::filter(Species == "Haddock")
+pre.cod <- pre.med %>% dplyr::filter(Species == "Cod")
+pre.had <- pre.med %>% dplyr::filter(Species == "Haddock")
+
+# Overall Cod and Haddock Pre and post...
+ssb.cod <- 100- 100*signif(mean(recent.cod$med.ssb/pre.cod$med.ssb,na.rm=T),digits=2)
+r.cod <- 100-100*signif(mean(recent.cod$med.rec/pre.cod$med.rec,na.rm=T),digits=2)
+ssb.had <- 100*signif(mean(recent.had$med.ssb/pre.had$med.ssb,na.rm=T),digits=2) - 100 # Because they increased....
+r.had <- 100*signif(mean(recent.had$med.rec/pre.had$med.rec,na.rm=T),digits=2) -100 # Because they increased...
+
+
+# Trend in NW for Cod and Haddock
+r.cod.nw <- 100-100*signif(mean(recent.cod$med.rec[recent.cod$Region == "Northwest Atlantic"] / pre.cod$med.rec[pre.cod$Region == "Northwest Atlantic"],na.rm=T),digits=2)
+r.cod.ne <- 100-100*signif(mean(recent.cod$med.rec[recent.cod$Region == "Northeast Atlantic"] / pre.cod$med.rec[pre.cod$Region == "Northeast Atlantic"],na.rm=T),digits=2)
+ssb.cod.nw <- 100-100*signif(mean(recent.cod$med.ssb[recent.cod$Region == "Northwest Atlantic"] / pre.cod$med.ssb[pre.cod$Region == "Northwest Atlantic"],na.rm=T),digits=2)
+ssb.cod.ne <- 100-100*signif(mean(recent.cod$med.ssb[recent.cod$Region == "Northeast Atlantic"] / pre.cod$med.ssb[pre.cod$Region == "Northeast Atlantic"],na.rm=T),digits=2)
+
+# And Haddock, flip equation around because they increased.
+r.had.nw <- 100*signif(mean(recent.had$med.rec[recent.had$Region == "Northwest Atlantic"] / pre.had$med.rec[pre.had$Region == "Northwest Atlantic"],na.rm=T),digits=2) -100
+ssb.had.nw <- 100*signif(mean(recent.had$med.ssb[recent.had$Region == "Northwest Atlantic"] / pre.had$med.ssb[pre.had$Region == "Northwest Atlantic"],na.rm=T),digits=2) - 100
+r.had.ne <- 100*signif(mean(recent.had$med.rec[recent.had$Region == "Northeast Atlantic"] / pre.had$med.rec[pre.had$Region == "Northeast Atlantic"],na.rm=T),digits=2) -100
+ssb.had.ne <- 100*signif(mean(recent.had$med.ssb[recent.had$Region == "Northeast Atlantic"] / pre.had$med.ssb[pre.had$Region == "Northeast Atlantic"],na.rm=T),digits=2) - 100
+
+```
+
+
+```{r mods, echo =F,include =F,warning=F}
+# The cod model
+#summary(mod.stan)
+#plot(mod.stan)
+#ranef(mod.stan)
+#se.ranef(mod.stan)
+# Split the data into the 2 time series
+dat.pre <- dat %>% dplyr::filter(Period == 'Pre 1993')
+dat.recent <- dat %>% dplyr::filter(Period == 'Recent')
+dat.all <- NULL
+# Get the stocks ready for the loop
+stocks <- unique(dat$Stock)
+n.stocks <- length(stocks)
+# And run the S-R model for each stock/era individually.
+
+# This is the analysis for the Alpha calculations.
+for(i in 1:n.stocks)
+{
+  # Filter the data into the pre and recent periods for the alpha analysis
+  pre.d <- dat.pre %>% filter(Stock == stocks[i])
+  recent.d <-        dat.recent %>% filter(Stock == stocks[i])
+  # Now run the models, but only run if you have data (i.e. Irish pre Cod has not data)
+  if(nrow(pre.d) > 0) mod.pre <-   lm(log.r.ssb ~ ssb, data= pre.d)
+  mod.recent <-      lm(log.r.ssb ~ ssb, data= recent.d)
+  # Now stick the data back into the data frames, first the alphas and their Standard Deviation from the model
+  if(nrow(pre.d) > 0) 
+  {
+    dat.pre$alpha[dat.pre$Stock == stocks[i]] <- coefficients(mod.pre)[1]
+    dat.pre$alpha.sd[dat.pre$Stock == stocks[i]] <- summary(mod.pre)$coefficients[1,2]
+    dat.pre$r2[dat.pre$Stock == stocks[i]] <- summary(mod.pre)$r.squared[1]
+  }
+  dat.recent$alpha[dat.recent$Stock == stocks[i]] <- coefficients(mod.recent)[1]
+  dat.recent$alpha.sd[dat.recent$Stock == stocks[i]] <- summary(mod.recent)$coefficients[1,2]
+  dat.recent$r2[dat.recent$Stock == stocks[i]] <- summary(mod.recent)$r.squared[1]
+
+  # Now the residuals
+  if(nrow(pre.d) > 0) dat.pre$resids[dat.pre$Stock == stocks[i]] <- residuals(mod.pre)
+  dat.recent$resids[dat.recent$Stock == stocks[i]] <-    residuals(mod.recent)
+  
+  # Now we also have a model which fits the full time series of the Ricker model, this is the one we are going to use for the residual figures and the ACF calculations.
+  dat.tmp <- dat %>% filter(Stock == stocks[i])
+  mod.all <- lm(log.r.ssb ~ ssb, data= dat.tmp)
+  dat.tmp$alpha <- as.numeric(coefficients(mod.all)[1])
+  dat.tmp$alpha.sd <- summary(mod.all)$coefficients[1,2]
+  dat.tmp$resids <- residuals(mod.all)
+  dat.tmp$r2 <-  summary(mod.all)$r.squared[1]
+  dat.all[[stocks[i]]] <- dat.tmp
+}
+
+
+# So North Sea Haddock and Western SS Haddock are both wild... Let's look closer at them...
+dat.alpha <- bind_rows(dat.pre,dat.recent)
+dat.alpha$alpha.exp <- exp(dat.alpha$alpha)
+dat.alpha$LCI <- dat.alpha$alpha - 1.96 *dat.alpha$alpha.sd
+dat.alpha$UCI <- dat.alpha$alpha + 1.96 *dat.alpha$alpha.sd
+
+# Now we do the same thing for what I'll call dat.all.mod, which is ricker fit to full time series.  This is where we'll want to house all the residuals
+dat.all.mod <- do.call('rbind',dat.all)
+dat.all.mod$alpha.exp <- exp(dat.all.mod$alpha)
+dat.all.mod$LCI <- dat.all.mod$alpha - 1.96 *dat.all.mod$alpha.sd
+dat.all.mod$UCI <- dat.all.mod$alpha + 1.96 *dat.all.mod$alpha.sd
+
+# Set up the levels for the Locations Georgraphically instead of Fogartys way.
+
+dat.all.mod$Location  <- factor(dat.all.mod$Location, levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+
+#c("North Sea","Irish Sea","Faroese","Barents Sea","Iceland","Eastern Scotian Shelf","Western Scotian Shelf","Eastern Georges Bank"))
+
+# Now moving to the GAM models and looking at those residuals...
+dat.all.mod$gam.resids <- NA
+for(i in 1:n.stocks)
+{
+  dat.gam <- dat.all.mod %>% filter(Stock == stocks[i])
+  mod.gam <- gam(log.r.ssb ~ year, data= dat.gam)
+  dat.all.mod$gam.resids[dat.all.mod$Stock == stocks[i]] <-    residuals(mod.gam)
+}
+
+
+
+
+
+
+# Next lets get the acf for each time series, table needs the
+acf.sr <- NULL
+acf.gam <- NULL
+tab.dat <- NULL 
+cor.split <-NULL
+acf.split <-NULL
+tab.split.dat <- NULL
+ccf.split.tmp <- NULL
+for(i in 1:n.stocks)
+{
+dat.tmp <- dat.all.mod[dat.all.mod$Stock == stocks[i],]
+sr.acf<- acf(dat.tmp$resids,plot=F)$acf[-1,1,1]
+len.sr.acf <- length(sr.acf)
+gam.acf <- acf(dat.tmp$gam.resids,plot=F)$acf[-1,1,1]
+len.gam.acf <- length(gam.acf)
+# This extracts the lag 1 correlation for the table
+tab.dat[[stocks[i]]] <- data.frame(Location = dat.tmp$Location[1],Species = dat.tmp$Species[1],acf.sr = sr.acf[1],acf.gam = gam.acf[1])
+acf.sr[[stocks[i]]] <- data.frame(Stock = rep(stocks[i],len.sr.acf), 
+                                  Species = rep(dat.tmp$Species[1],len.sr.acf), 
+                                  Location = rep(dat.tmp$Location[1],len.sr.acf),
+                                  lag = 1:len.sr.acf,
+                                  acf = sr.acf)
+acf.gam[[stocks[i]]] <- data.frame(Stock = rep(stocks[i],len.gam.acf), 
+                                  Species = rep(dat.tmp$Species[1],len.gam.acf), 
+                                  Location = rep(dat.tmp$Location[1],len.gam.acf),
+                                  lag = 1:len.gam.acf,
+                                  acf = gam.acf)
+
+# Now do the same thing but split the time series into Pre 1993 and Recent
+dat.recent <- dat.tmp %>% dplyr::filter(Period == "Recent")
+dat.pre <- dat.tmp %>% dplyr::filter(Period == "Pre 1993")
+# First for the recent period
+if(nrow(dat.recent) >=5)
+{
+# First get the lag one correlations with uncertanty
+len <- nrow(dat.recent)
+sr.cor.recent<- cor.test(dat.recent$resids[2:len],dat.recent$resids[1:(len-1)])
+gam.cor.recent <- cor.test(dat.recent$gam.resids[2:len],dat.recent$gam.resids[1:(len-1)])
+# Now do the ACF's for the correlelograms.
+sr.acf.recent<- acf(dat.recent$resids,plot=F)$acf[-1,1,1]
+len.sr.acf.recent <- length(sr.acf.recent)
+gam.acf.recent <- acf(dat.recent$gam.resids,plot=F)$acf[-1,1,1]
+len.gam.acf.recent <- length(gam.acf.recent)
+}
+
+if(nrow(dat.recent) < 5)
+{
+  sr.cor.recent <- gam.cor.recent <- list(estimate = NA, conf.int = c(NA,NA))
+  gam.acf.recent <- sr.acf.recent <- NA
+  len.sr.acf.recent <- len.gam.acf.recent <- 0
+}
+
+if(nrow(dat.pre) >=5)
+{
+# First get the lag one correlations with uncertanty
+len <- nrow(dat.pre)
+sr.cor.pre<- cor.test(dat.pre$resids[2:len],dat.pre$resids[1:(len-1)])
+gam.cor.pre <- cor.test(dat.pre$gam.resids[2:len],dat.pre$gam.resids[1:(len-1)])
+# Now do the ACF's for the correlelograms.
+sr.acf.pre<- acf(dat.pre$resids,plot=F)$acf[-1,1,1]
+len.sr.acf.pre <- length(sr.acf.pre)
+gam.acf.pre <- acf(dat.pre$gam.resids,plot=F)$acf[-1,1,1]
+len.gam.acf.pre <- length(gam.acf.pre)
+}
+
+if(nrow(dat.pre) < 5)
+{
+  sr.cor.pre <- gam.cor.pre <- list(estimate = NA, conf.int = c(NA,NA))
+  gam.acf.pre <- sr.acf.pre <- NA
+  len.sr.acf.pre <- len.gam.acf.pre <- 0
+}
+
+# Get the split time series results together
+cor.split[[stocks[i]]] <- data.frame(Correlation = c(gam.cor.pre$estimate,   sr.cor.pre$estimate,gam.cor.recent$estimate,    sr.cor.recent$estimate),
+                                        lci =         c(gam.cor.pre$conf.int[1], sr.cor.pre$conf.int[1],gam.cor.recent$conf.int[1],    sr.cor.recent$conf.int[1]),
+                                        uci =         c(gam.cor.pre$conf.int[2], sr.cor.pre$conf.int[2],gam.cor.recent$conf.int[2],    sr.cor.recent$conf.int[2]),
+                                        Period =      c("Recent","Recent","Pre 1993","Pre 1993"),
+                                        Model =       c("GAM","Stock Recruit","GAM","Stock Recruit"),
+                                        Stock =       rep(stocks[i],4),
+                                        Location =    rep(unique(dat.recent$Location),4))
+}
+
+
+
+# Get the full time series results together
+dat.acf.split <- do.call('rbind',cor.split)
+tab.dat <- do.call("rbind",tab.dat)
+tab.dat$acf.sr <- signif(tab.dat$acf.sr,digits=2)
+tab.dat$acf.gam <- signif(tab.dat$acf.gam,digits=2)
+acf.gam <- do.call("rbind",acf.gam)
+acf.sr <- do.call("rbind",acf.sr)
+acf.sr$cat <- "green"
+acf.sr$cat[acf.sr$acf <=0] <-  'red'
+acf.gam$cat <- "green"
+acf.gam$cat[acf.gam$acf <=0] <- 'red'
+
+#c("North Sea","Irish Sea","Faroese","Barents Sea","Iceland","Eastern Scotian Shelf","Western Scotian Shelf","Eastern Georges Bank"))
+# Set up Geographically instead of Fogartys way.
+dat.acf.split$Location  <- factor(dat.acf.split$Location, levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+#c("North Sea","Irish Sea","Faroese","Barents Sea","Iceland","Eastern Scotian Shelf","Western Scotian Shelf","Eastern Georges Bank"))
+
+dat.acf.split$Stock  <- factor(dat.acf.split$Stock, levels = c("Cod Eastern Georges Bank","Haddock Eastern Georges Bank",
+                                                               "Cod Western Scotian Shelf","Haddock Western Scotian Shelf",
+                                                               "Cod Eastern Scotian Shelf","Haddock Eastern Scotian Shelf",
+                                                               "Cod Icelandic","Haddock Icelandic",
+                                                               "Cod Faroese","Haddock  Faroese",
+                                                               "Cod Irish Sea","Haddock Irish Sea",
+                                                               "Cod North Sea","Haddock North Sea",
+                                                               "Cod Barents Sea","Haddock Barents Sea"
+                                                               ))
+
+
+#Next up I want to calculate the cross correlation between the recruit time series, on the log scale...
+
+Locations <- unique(dat$Location)
+n.locs <- length(Locations)
+periods <- unique(dat$Period)
+n.periods <- length(periods)
+
+ccf.tmp <- NULL
+cory.tmp <- NULL
+cory.split.tmp <- NULL
+for(i in 1:n.locs)
+{
+dat.ccf <- dat %>% dplyr::filter(Location == Locations[i])
+# Now need to get time series the same length and same years
+cor.cod <- dat.ccf[dat.ccf$Species == "Cod",c("year","Location","l.rec","Species","Period")]
+cor.had <- dat.ccf[dat.ccf$Species == "Haddock",c("year","Location","l.rec","Species","Period")]
+# What years are in both datasets and subset it to that.
+yr.cod <- cor.cod$year
+yr.had <- cor.had$year
+
+first.year <- max(c(min(yr.cod),min(yr.had)))
+last.year <- min(c(max(yr.cod),max(yr.had)))
+yr.range <- first.year:last.year
+cor.cod <- cor.cod %>% dplyr::filter(year %in% yr.range)
+cor.had <- cor.had %>% dplyr::filter(year %in% yr.range)
+
+tst.full <- cor.test(cor.cod$l.rec,cor.had$l.rec)
+ccf.mod <- ccf(cor.cod$l.rec,cor.had$l.rec,plot=FALSE)
+ccf.tmp[[Locations[i]]] <- cbind(lag=ccf.mod$lag, x.corr=ccf.mod$acf) %>% as_tibble() %>% mutate(cat=ifelse(x.corr>0,"green","red"))
+ccf.tmp[[Locations[i]]]$Location <- Locations[i]
+cory.tmp[[Locations[i]]] <- data.frame(Correlation = tst.full$estimate,lci = tst.full$conf.int[1], uci = tst.full$conf.int[2],Location = Locations[i])
+
+# Now get the correlation for each half of the time series, if we have data in both halves, I made these time series the same length above, so we just need to look at
+# either cod or haddock time series
+n.recent.yrs <- nrow(cor.cod[cor.cod$Period == "Recent",])
+n.pre.yrs <- nrow(cor.cod[cor.cod$Period == "Pre 1993",])
+# I'm not doing this unless we have 5 years of data
+if(n.recent.yrs >= 5)   tst.recent <-  cor.test(cor.cod$l.rec[cor.cod$Period == "Recent"],cor.had$l.rec[cor.had$Period == "Recent"])
+if(n.recent.yrs < 5)    tst.recent <- list(estimate = NA, conf.int = c(NA,NA))
+if(n.pre.yrs >= 5)      tst.pre <-  cor.test(cor.cod$l.rec[cor.cod$Period == "Pre 1993"],cor.had$l.rec[cor.had$Period == "Pre 1993"])
+if(n.pre.yrs < 5)       tst.pre <- list(estimate = NA, conf.int = c(NA,NA))
+
+
+ccf.split.tmp[[Locations[i]]] <- data.frame(Correlation = c(tst.recent$estimate,    tst.pre$estimate),
+                      lci =         c(tst.recent$conf.int[1], tst.pre$conf.int[1]),
+                      uci =         c(tst.recent$conf.int[2], tst.pre$conf.int[2]),
+                      Period =      c("Recent","Pre 1993"),
+                      Location =    rep(Locations[i],2))
+}
+
+dat.cory <- do.call('rbind',cory.tmp)
+dat.ccf <- do.call("rbind",ccf.tmp)
+dat.ccf.split <- do.call('rbind',ccf.split.tmp)
+
+# Set up the levels for the Locations to be Geographic in nature rather than following Fogarty..
+dat.cory$Location  <- factor(dat.cory$Location, levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+dat.ccf$Location  <- factor(dat.ccf$Location, levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+dat.ccf.split$Location  <- factor(dat.ccf.split$Location, levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+# and the levels for the table to get that in order we want.
+tab.dat$Location <- factor(tab.dat$Location,levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+# Fogartys order
+#c("North Sea","Irish Sea","Faroese","Barents Sea","Iceland","Eastern Scotian Shelf","Western Scotian Shelf","Eastern Georges Bank"))
+tab.dat <- tab.dat[order(tab.dat$Location),]
+
+# Using the fun idea of using either the bottom 20% or 50% of the SSB values to estimate alpha
+# We lose a lot of data with the 20% filter.
+dat.20.alpha.cod <- dat.all.mod %>% dplyr::group_by(Period,Location,.drop = F) %>% 
+                                dplyr::filter(ssb.prop <= 0.2, Species == "Cod") %>% dplyr::summarise(alpha.20.cod = mean(log.r.ssb),
+                                                                                                      lci.20.cod = mean(log.r.ssb) - sd(log.r.ssb),
+                                                                                                      uci.20.cod = mean(log.r.ssb) + sd(log.r.ssb))
+dat.20.alpha.had <- dat.all.mod %>% dplyr::group_by(Period,Location,.drop = F) %>% 
+                                dplyr::filter(ssb.prop <= 0.2, Species == "Haddock") %>% dplyr::summarise(alpha.20.had = mean(log.r.ssb),
+                                                                                                      lci.20.had = mean(log.r.ssb) - sd(log.r.ssb),
+                                                                                                      uci.20.had = mean(log.r.ssb) + sd(log.r.ssb))
+# Combine
+dat.20.alpha <- left_join(dat.20.alpha.cod,dat.20.alpha.had,by = c("Period","Location"))
+
+
+# We lose almost nothing with the 40% filter though.  Now we correct for SPR with this, I haven't made the correction to the 20's since we aren't using that
+
+dat.spr.mod <- left_join(dat.all.mod,spr.dat,by = c("Period","Location","Species"))
+
+dat.40.alpha.cod <- dat.spr.mod %>% dplyr::group_by(Period,Location,.drop=F) %>% 
+                            dplyr::filter(ssb.prop <= 0.4, Species == "Cod") %>% dplyr::summarise(alpha.40.cod = mean(log(exp(log.r.ssb)*SBPR*M.avg),na.rm=T),
+                                                                                                  lci.40.cod = mean(log(exp(log.r.ssb)*SBPR*M.avg),na.rm=T) - sd(log.r.ssb,na.rm=T),
+                                                                                                  uci.40.cod = mean(log(exp(log.r.ssb)*SBPR*M.avg),na.rm=T) + sd(log.r.ssb,na.rm=T))
+
+dat.40.alpha.had <- dat.spr.mod %>% dplyr::group_by(Period,Location,.drop=F) %>% 
+                            dplyr::filter(ssb.prop <= 0.4, Species == "Haddock") %>% dplyr::summarise(alpha.40.had = mean(log(exp(log.r.ssb)*SBPR*M.avg),na.rm=T),
+                                                                                                      lci.40.had = mean(log(exp(log.r.ssb)*SBPR*M.avg),na.rm=T) - sd(log.r.ssb,na.rm=T),
+                                                                                                      uci.40.had = mean(log(exp(log.r.ssb)*SBPR*M.avg),na.rm=T) + sd(log.r.ssb,na.rm=T))
+dat.40.alpha <- left_join(dat.40.alpha.cod,dat.40.alpha.had,by = c("Period","Location"))
+dat.40.alpha$Location  <- factor(dat.40.alpha$Location, levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+                                   
+#c("North Sea","Irish Sea","Faroese","Barents Sea","Iceland","Eastern Scotian Shelf","Western Scotian Shelf","Eastern Georges Bank"))
+
+
+# Now I want to do an analysis between cod/haddock stocks, but only using time series that are the same length, just to make sure that the time series length 
+# isn't impacting our results.  I'll tidy up the dat.all.mod object to check this for both the alpha residuals and the gam residuals.
+
+
+
+dat.trim <- NULL
+for(i in 1:n.locs)
+{
+dat.tmp <- dat.all.mod %>% dplyr::filter(Location == Locations[i])
+# Now need to get time series the same length and same years
+dat.cod <- dat.tmp[dat.tmp$Species == "Cod",c("year","Location","Stock","Species",'Period','resids','gam.resids')]
+dat.had <- dat.tmp[dat.tmp$Species == "Haddock",c("year","Location","Stock","Species",'Period','resids','gam.resids')]
+# What years are in both datasets and subset it to that.
+yr.cod <- dat.cod$year
+yr.had <- dat.had$year
+
+first.year <- max(c(min(yr.cod),min(yr.had)))
+last.year <- min(c(max(yr.cod),max(yr.had)))
+yr.range <- first.year:last.year
+dat.cod <- dat.cod %>% dplyr::filter(year %in% yr.range)
+dat.had <- dat.had %>% dplyr::filter(year %in% yr.range)
+dat.trim[[Locations[i]]] <- bind_rows(dat.cod,dat.had)
+
+}
+
+
+dat.trim.mod <- do.call("rbind",dat.trim)
+
+
+# This is needed for the sd figure and for some calculations in the text.
+
+sds.cod.sr <- dat.all.mod %>% dplyr::filter(Species == 'Cod') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(resids))
+# Toss Irish Sea Pre 1993 because we don't have a match with Haddock.
+sds.cod.sr <- sds.cod.sr[!(sds.cod.sr$Location == "Irish Sea" & sds.cod.sr$Period == "Pre 1993"),]
+sds.had.sr <- dat.all.mod %>% dplyr::filter(Species == 'Haddock') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(resids))
+names(sds.cod.sr) <- c("Location","Period","sd.cod")
+names(sds.had.sr) <- c("Location","Period","sd.had")
+# Reorder the Locations to match (or come close to matching) Fogarty
+dat.sds.sr <- left_join(sds.cod.sr,sds.had.sr,by = c("Location","Period"))
+
+# Now calculate some summaries for the text
+
+ratio <- dat.sds.sr %>% dplyr::group_by(Period) %>% dplyr::summarise(ratio = sd.had/sd.cod)
+ratio.pre <- 100*signif(mean(ratio$ratio[ratio$Period == "Pre 1993"]),digits=2) -100
+ratio.recent <- 100* signif(mean(ratio$ratio[ratio$Period == "Recent"]),digits=2) -100
+
+# I think we want a Ricker table that shows log(a) and r2 for each stock in each period
+
+
+# Just setting the same thing up, but in two different formats...
+tab.ricker <- dat.alpha %>% dplyr::group_by(Location,Species,Period,Region) %>% 
+                                    dplyr::summarise(`R squared` = formatC(mean(r2),digits=3,format='f'),
+                                                     `log(alpha)` = formatC(mean(alpha),digits=2,format='f'),
+                                                     `SD(log(alpha))` = formatC(mean(alpha.sd),digits=2,format='f'))
+#tab.ricker <- knitr::kable(tab.ricker)
+
+res.ricker <- dat.alpha %>% dplyr::group_by(Location,Species,Period,Region) %>% 
+                                    dplyr::summarise(r2 = mean(r2),
+                                                     alpha = mean(alpha),
+                                                     alpha.sd = mean(alpha.sd))
+
+# Overall r2 explains about 27% of variance in data
+r2.mean <- signif(100*mean(res.ricker$r2),digits=2)
+
+# Compare some potential models here, we see there is nothing interesting statistically going on.
+ricker.comp.mod <- lm(r2 ~ Period*Species*Region,data= res.ricker)
+#summary(ricker.comp.mod)
+ricker.period.mod <- lm(r2 ~ Period,data= res.ricker)
+#summary(ricker.period.mod)
+ricker.species.mod <- lm(r2 ~ Species,data= res.ricker)
+#summary(ricker.species.mod)
+ricker.region.mod <- lm(r2 ~ Region,data= res.ricker)
+#summary(ricker.region.mod)
+
+
+# Now a Table summarizing the Recruitment residual variability
+
+tab.resids <- dat.all.mod %>% dplyr::group_by(Location,Species,Period,Region) %>% dplyr::summarise(`SD(GAM residuals)` = signif(sd(gam.resids),digits=2),
+                                                                                                   `SD(S-R residuals)` = signif(sd(resids),digits=2))
+table.ricker <- left_join(tab.resids,tab.ricker,by = c("Location","Species","Period","Region"))
+table.ricker <- knitr::kable(table.ricker)
+
+```
+
+# Methods
+
+## Data
+
+We compiled time series of recruitment (R) and spawning stock biomass (SSB) of sympatric cod and haddock stocks from the most recently available, age structured assessments conducted by the International Exploration of the Seas (ICES), Fisheries and Oceans Canada (DFO) and the National Marine Fisheries Service (NMFS). These stock pairs were from the same geographic areas that were evaluated by Fogarty et al (2001); we also added one additional area - the Irish Sea (Table 1). The West of Scotland region which was part of the original analysis by Fogarty et al. (2001) was excluded from our analysis, since haddock West of Scotland is no longer assessed as a separate stock, but instead is now assessed as part of the larger North Sea stock.
+
+The 2021 ICES advice web site (https://www.ices.dk/advice/Pages/Latest-Advice.aspx), was used to access recruitment and SSB data for the Northeast Atlantic stocks except for the Faroese stock (2020 ICES advice). Regional stock and recruitment data for the Northwest Atlantic stocks of cod were obtained from the following sources: Div. 4VsW (Mohn and Swain 2012), Div. 4X5Y (DFO 2019), Eastern Georges Bank (Wang et al. 2015). For the NW Atlantic stocks of haddock the sources were: Div. 4VW (Mohn and Simon 2002), Div. 4X5Y (Wang et al. 2017), Eastern Georges Bank (Stone et al. 2015). The cod and haddock stocks resident on the Eastern Scotian Shelf (Div. 4VW) collapsed in the earlier 1990s. They were placed under a moratorium and are no longer regularly assessed (Table 1), despite supporting large scale fisheries in the past and showing recent improvements in biomass. 
+
+
+In this analysis we focus on within region comparisons of the cod and haddock stocks (Table 1). The age at recruitment differs among regions and in some cases, age at recruitment differs within species within regions. Fogarty et al (2001) standardized recruitment of all stocks to age 1, but because we focused only on within region comparisons, the stocks were standardized within regions when age at recruitment differed. An instantaneous natural mortality rate of 0.2 was assumed for this standardization and no stock was adjusted more than 1 year. Recruitment estimates for the North Sea  and Irish Sea haddock stocks were given as age 0 and were subsequently adjusted to age 1 to match the cod stocks overlapping in these areas. The recruit estimates for Icelandic Cod were given as age 3 and were adjusted to age 2, under the assumed natural mortality of 0.2, to match the recruitment age for the haddock stock in this region.
+
+## Analysis
+
+Following the same approach as Fogarty et al (2001), recruitment variability was assessed using a Ricker stock recruitment model (Supplement Figure S1 and S2). The Ricker model was linearized to:
+
+$$ log(\frac{R}{SSB}) = log(a) + b \times log(SSB) + \epsilon_i)$$
+
+*R* is the number of recruits and *SSB* is the spawning stock biomass in the birth year of  the recruits. The parameter *a* is the intercept of the relationship on a log scale and is commonly  referred to as the steepness parameter which provides an estimate of  the number of recruits produced at low *SSB*.  The parameter  *b* controls the location of the inflection point of the Ricker model and the error term in the model is represented by $\epsilon_i$, which we have assumed to be normally distributed. The standard deviation of the residuals from this model was used as one of our metrics of recruitment variability.
+
+Given that there is often a great deal of uncertainty in the fitting of theoretical stock and recruitment relationships to data, we also quantified recruitment variability using a *model-free* approach using Generalized Additive Models (GAMS) which removed trends, potentially resulting from *SSB*, from the recruitment time series (on the log scale) for each stock (Supplement Figure S3).  The standard deviation of the residuals from this model was used as one of our metrics of recruitment variability.
+
+We chose to separate the analysis of the *SSB* and *R* time series into two periods to facilitate a comparison with the results obtained by Fogarty et al. (2001) and to assess the possibility that there were differences in the observed patterns during the most recent time period.  Hence, the time series were split into a  *Pre 1993* (years prior to and including 1992) period and a *Recent* period (1993-end of time series).  In addition to facilitating a direct comparison with Fogarty et al. (2001), the early 1990s marked a point in time when many of the NW Atlantic stocks of cod and haddock either collapsed or reached a historical minimum (Shackell and Frank 2007, Frank et al. 2016).   
+
+The steepness parameter in the Ricker stock and recruitment model (e.g. Wiff et 2018, Lowerre-Barbieri et al 2017) is an estimate of the number of recruits produced per unit SSB at low SSB levels. It is considered an indicator of a stock’s ability to recover from collapse/depletion and was evaluated for each stock. Because of our concerns regarding the fitting of theoretical models to our data, we have also estimated steepness directly from the data by calculating the average R/SSB at low SSB levels where low SSB values were considered to 40% of the maximum SSB value in the time series.
+
+We also quantified temporal autocorrelation in the recruitment residuals from both the Ricker and GAM models in keeping with the various lines of inquiry initiated by Fogarty et al. (2001). The existence of significant negative autocorrelation implies inter-cohort intraspecific competition and/or cannibalism, whereas positive autocorrelation suggests persistent environmental forcing may be operative (Ricard et al 2016). This analysis was conducted to determine if there were species-specific patterns that would explain difference is the magnitude of residual variability between the two species.
+
+Finally, we estimated the temporal correlation of the recruitment residuals between cod and haddock stocks within each region in each period. A positive correlation may imply that the two species are responding to environmental drivers in the same way whereas a negative correlation would suggest that interspecific competition, predation or that environmental drivers act to produce contrasting species-specific effects. Finally, we investigated whether or not the correlation between recruitment of sympatric stocks changed over time (e.g. Bogstad et al 2013 for Barents Sea cod and haddock). Significant differences in the correlation of the recruitment residuals between the stocks in each period would be indicative of such a shift.
+
+
+# Results
+
+## Input Data
+
+The SSB and R time series were generally longer for the NE Atlantic stocks in comparison to the available data for the NW Atlantic stocks, attributable in part to earlier start time of the NE series (Table 1). The year SSB reached its minimum observed level did not show any particular pattern with the possible exception of three regions (Iceland, Barents Sea, and North Sea) where minima occurred prior to the 1990s (with the exception of North Sea cod). There was no pattern in the year of maximum SSB which ranged as early as 1955 for Icelandic cod to 2013 for cod and haddock in the Barents Sea and 2018 for Irish Sea haddock. Variability in SSB, based on the ratio of the maximum to minimum observed values in the time series, was lowest among the NE Atlantic haddock stocks (range: 4.4 – 10.7), followed by NE Atlantic cod stocks (range: 6.3 – 20.9), NW Atlantic haddock stocks (range: 3.1 – 25.2) and NW Atlantic cod stocks (range: 10 - 39).  Myers et al. (ref needed) have argued that poor fits of theoretical stock and recruitment relationships often arise due to the low dynamic range of observations so one might expect that relatively stronger S-R relationships will be evident among the NW Atlantic stocks. The Ricker models explained only `r r2.mean`% of the variance between recruits and SSB on average, with no significant difference observed between the Species, Regions, or the Period (Table 2). 
+
+In nearly every region, the standard deviation of the log10 transformed recruitment series was higher for haddock than for cod (Table 1) suggesting the patterns were robust to the varying time series length and range of variation in SSB. The pattern is also broadly supportive of the finding by Fogarty et al. (2001) regarding higher recruitment variability among co-occurring stocks of haddock and cod, although no adjustments were made to account for the potential influence of spawning stock biomass differences among the two species with regions. 
+
+R and SSB Time Trends
+
+For cod across all regions, the recruit numbers in the *Recent* period were on average `r r.cod`% lower than the *Pre 1993* period, in the Northeast Atlantic the decline was `r r.cod.ne` while in the Northwest Atlantic this decline was more pronounced with declines in recruit numbers averaging `r r.cod.nw`% (Figures \@ref(fig:fog-rec) - \@ref(fig:hist-rec-ssb)). Similarly, the *SSB* for Atlantic Cod declined in the *Recent* period by `r ssb.cod`% across all regions, which was again driven by the Northwest Atlantic stocks where declines in *SSB* averaged `r ssb.cod.nw`% in the *Recent* period, the declines for the Northeast Atlantic stocks averaged `r ssb.cod.ne`% (Figures \@ref(fig:fog-rec) - \@ref(fig:hist-rec-ssb)). 
+
+For haddock across all regions, the recruit numbers increased in the *Recent* period by `r r.had`% relative to the *Pre 1993* period, in the Northeast Atlantic there was no difference in the aveage recruitment numbers between the two perios, while in the Northwest Atlantic the recruit numbers averaged `r r.had.nw`% higher in the *Recent* period (Figures \@ref(fig:fog-rec) - \@ref(fig:hist-rec-ssb)).  Similarly, the *SSB* for Haddock increased in the *Recent* period by `r ssb.had`%, with the increase in *SSB* higher for the Northwest Atlantic stocks (`r ssb.had.nw`%) than the Northeast Atlantic stocks(`r ssb.had.ne`%).
+
+## Recruitment residuals 
+
+The results of the analysis using the standard deviation of the recruitment residuals from the Ricker Stock Recruitment models and the GAM models both indicated that recruitment variability was larger for Haddock than for Atlantic Cod (Table 2). The standard deviation of the recruitment residuals were on average `r ratio.pre`% higher (Ricker model residuals) for the Haddock Stocks in the *Pre 1993* period than the Atlantic Cod stocks (Figure \@ref(fig:sd-resid-sr), and Table 2). In the *Recent* Period, the standard deviation of the recruitment residuals were on average `r ratio.recent`% higher (Ricker model residuals) for the Haddock Stocks than the Atlantic Cod stocks (Figure \@ref(fig:sd-resid-sr) and Table 2), similar to the *Pre 1993* period. 
+
+## Resilience: Steepness parameter
+
+In the *Pre 1993* period, no generalizable differences were observed between the steepness parameter estimate (i.e. slope at origin, *log(a)* parameter in Ricker model) of Haddock and Atlantic Cod stocks using either the Ricker model estimates (Figure \@ref(fig:sr-alpha-plot) and Table 2) or when using the average log(R/SSB) when SSB is < 0.4 (Figure \@ref(fig:alpha-40-plt)). In the *Recent* period, the steepness parameter estimates of Haddock stocks tended to be higher than the Atlantic Cod stocks using both the Ricker model estimates (Figure \@ref(fig:sr-alpha-plot) and Table 2) and when using the average log(R/SSB) when SSB is < 0.4 (Figure \@ref(fig:alpha-40-plt)). In most cases the steepness estimates in the *Recent* period were not significantly different, but for all regions except the Eastern Scotian Shelf the steepness estimate was higher for Haddock than for Atlantic Cod. These results are in contrast to the results of Fogarty et al. (2001) in which the steepness parameter estimate tended to be higher for cod than observed in Haddock.
+
+Residual Autocorrelation and Time series correlation
+
+The autocorrelation in recruitment residuals in the *Pre 1993* tended to be positive for the Northeast Atlantic stocks (Figures \@ref(fig:acf-split-gam) and \@ref(fig:acf-split-sr)).  In the Northwest Atlantic, the more southern stocks tended to have a lower autocorrelation, with Eastern Georges Bank Atlantic Cod being the only stock in the analysis with negative residuals using both the GAM model and the Ricker model. The correlation between the Atlantic Cod and Haddock stocks tended to be positive in the *Pre 1993* period, but for most (4) stocks the correlation was not significant (Figure \@ref(fig:cross-ccf-split)). These results are broadly similar to the results found in Fogarty et al. (2001).
+
+The autocorrelation in recruitment residuals in the *Recent* tended to be positive for the Northeast Atlantic stocks (Figures \@ref(fig:acf-split-gam) and \@ref(fig:acf-split-sr)), similar to what was observed in the *Pre 1993* period.  In the Northwest Atlantic, the Eastern Georges Bank and Western Scotian Shelf stocks tended to be more negative and had larger uncertainties than most other stocks for both the GAM and Ricker residuals. The correlation between the Atlantic Cod and Haddock stocks tended to be positive in the *Recent* period, but for most (6) stocks the correlation was not significant (Figure \@ref(fig:cross-ccf-split)).
+
+
+# Tables
+
+Table 2:  The Ricker and GAM residuals along with the Ricker model fit summmaries for each stock in each period.
+
+```{r rick-tab, echo = F,fig.width=11,fig.height=11,message=F,fig.cap = "The standard deviation of the Ricker and GAM residuals along with the Ricker model fit summmaries for each stock in each period."}
+
+table.ricker
+
+
+```
+
+\newpage
+
+# Figures
+
+```{r fog-ssb, message=F,echo =F,fig.width=11,fig.height=11,fig.cap= " SSB (thousands of tonnes) time series for 8 cod (solid line) and haddock (dashed line) stocks in the Atlantic Ocean. The red line indicates data from the Pre-1993 Period, while the blue line is for the Recent Period. The vertical grey line indicates the division between the two periods."}
+# Recruits vs SSB
+p0 <- ggplot(dat %>% dplyr::filter(Region == "Northeast Atlantic")) + geom_line(aes(y=ssb/1000, x= year,colour = Period,linetype = Species)) + 
+              facet_wrap(~Location ,scales = 'free',ncol=3) + xlab("") + ylab("Spawning Stock Biomass (1000s of tonnes)")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + 
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+              geom_vline(xintercept = 1992.5,color = "grey",size =2) + 
+              theme(axis.title.y = element_text(hjust=-0.1),
+                    legend.position = c(0.85, 0.25), 
+                    legend.title.align=1,
+                    legend.text.align = 1,
+                    legend.title = element_text(size=16),
+                    legend.text = element_text(size=12),
+                    legend.key.width = unit(3,"cm")) + guides(colour = guide_legend(override.aes = list(size=1.5),title.position = "top"),
+                                                              linetype = guide_legend(override.aes = list(size=1.5)))
+
+# Now the NW Atlantic stocks
+p1 <- ggplot(dat %>% dplyr::filter(Region == "Northwest Atlantic")) + geom_line(aes(y=ssb/1000, x= year,colour = Period,linetype = Species)) + 
+              facet_wrap(~ Location ,scales = 'free',ncol=3) + xlab("Year") + ylab("")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + 
+              geom_vline(xintercept = 1992.5, color ='grey',size=2)+
+              theme(legend.position = "none")
+
+p.ssb.ts <- plot_grid(p0,p1,nrow=2,rel_heights = c(2,1))
+p.ssb.ts
+save_plot("D:/Github/Haddock/Results/Figure_1.png",p.ssb.ts,base_height = 8,base_width = 11)
+```
+
+
+
+```{r fog-rec, warning=F,echo =F,fig.width=11,fig.height=11,fig.cap= "Recruitment (in millions) time series for 8 cod (solid line) and haddock (dashed line) stocks in the Atlantic Ocean. The red line indicates data from the Pre-1993 Period, while the blue line is for the Recent Period. The vertical grey line indicates the division between the two periods."}
+# Recruits vs SSB
+p0 <- ggplot(dat %>% dplyr::filter(Region == "Northeast Atlantic")) + geom_line(aes(y=recruits/1000, x= year,colour = Period,linetype = Species)) + 
+              facet_wrap(~Location ,scales = 'free',ncol=3) + xlab("") + ylab("Recruits (Number in Millons)")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + scale_y_log10() + 
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+              geom_vline(xintercept = 1992.5,color = "grey",size =2) + 
+              theme(axis.title.y = element_text(hjust=0),
+                    legend.position = c(0.85, 0.25), 
+                    legend.title.align=1,
+                    legend.text.align = 1,
+                    legend.title = element_text(size=16),
+                    legend.text = element_text(size=12),
+                    legend.key.width = unit(3,"cm")) + guides(colour = guide_legend(override.aes = list(size=1.5),title.position = "top"),
+                                                              linetype = guide_legend(override.aes = list(size=1.5)))
+
+# Now the NW Atlantic stocks
+p1 <- ggplot(dat %>% dplyr::filter(Region == "Northwest Atlantic")) + geom_line(aes(y=recruits/1000, x= year,colour = Period,linetype = Species)) + 
+              facet_wrap(~ Location ,scales = 'free',ncol=3) + xlab("Year") + ylab("")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + scale_y_log10() + 
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+              geom_vline(xintercept = 1992.5, color ='grey',size=2)+
+              theme(legend.position = "none")
+
+p.rec.ts <- plot_grid(p0,p1,nrow=2,rel_heights = c(2,1))
+p.rec.ts
+save_plot("D:/Github/Haddock/Results/Figure_2.png",p.rec.ts,base_height = 8,base_width = 11)
+
+```
+
+```{r fog-rssb, warning=F,echo =F,fig.width=11,fig.height=11,fig.cap= "Time series of the number of recruits produced per kilogram of SSB for 8 cod (solid line) and haddock (dashed line) stocks in the Atlantic Ocean. The red line indicates data from the Pre-1993 Period, while the blue line is for the Recent Period. The vertical grey line indicates the division between the two periods."}
+# Recruits vs SSB
+p0 <- ggplot(dat %>% dplyr::filter(Region == "Northeast Atlantic")) + geom_line(aes(y=rec.ssb, x= year,colour = Period,linetype = Species)) + 
+              facet_wrap(~Location ,scales = 'free',ncol=3) + xlab("") + ylab("Recruits per kilogram of SSB ")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + scale_y_log10() + 
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+              geom_vline(xintercept = 1992.5,color = "grey",size =2) + 
+              theme(axis.title.y = element_text(hjust=0),
+                    legend.position = c(0.85, 0.25), 
+                    legend.title.align=1,
+                    legend.text.align = 1,
+                    legend.title = element_text(size=16),
+                    legend.text = element_text(size=12),
+                    legend.key.width = unit(3,"cm")) + guides(colour = guide_legend(override.aes = list(size=1.5),title.position = "top"),
+                                                              linetype = guide_legend(override.aes = list(size=1.5)))
+
+# Now the NW Atlantic stocks
+p1 <- ggplot(dat %>% dplyr::filter(Region == "Northwest Atlantic")) + geom_line(aes(y=rec.ssb, x= year,colour = Period,linetype = Species)) + 
+              facet_wrap(~ Location ,scales = 'free',ncol=3) + xlab("Year") + ylab("")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + scale_y_log10() + 
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+              geom_vline(xintercept = 1992.5, color ='grey',size=2)+
+              theme(legend.position = "none")
+
+p.rssb.ts <- plot_grid(p0,p1,nrow=2,rel_heights = c(2,1))
+p.rssb.ts
+save_plot("D:/Github/Haddock/Results/Figure_3_new.png",p.rssb.ts,base_height = 8,base_width = 11)
+
+```
+
+
+\newpage
+
+```{r cross-ccf-split,echo=F,fig.width=10,fig.height=10,message=F,warning=F,fig.cap ="Correlation of the recruitment (log scale) time series between cod and haddock stocks in each region. For each stock the Pre 1993 period is shown on the left and the Recent period is on the right. The error bars represent the 95//% Confidence Intervals."}
+
+cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey")
+shapes <- c(rep(21,4),rep(24,4))
+
+#dat.ccf.split$Location <- factor(dat.ccf.split, levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+
+
+         
+#c("North Sea","Irish Sea","Faroese","Barents Sea","Iceland","Eastern Scotian Shelf","Western Scotian Shelf","Eastern Georges Bank"))
+
+p.ccf.split <- ggplot(dat.ccf.split,aes(y=Correlation,x=Location,fill = Location,shape = Location,color=Location,group = Period)) + 
+                  geom_hline(yintercept = 0, linetype='dashed',color='grey',size=1.25) +
+                  #facet_wrap(~Period,ncol=1) + 
+                  geom_point(size=4,position = position_dodge(width =0.5)) +
+                  scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) + 
+                  geom_errorbar(aes(ymin =lci,ymax=uci),width=0,position = position_dodge(width =0.5)) + 
+                  theme(axis.text.x = element_text(angle = 45, hjust = 1.,size=16), 
+                        legend.title = element_blank(),legend.position = 'none') + xlab("")
+p.ccf.split
+save_plot("D:/Github/Haddock/Results/Figure_4_new.png",p.ccf.split,base_height = 10, base_width = 14)
+
+```
+
+\newpage
+
+
+
+```{r sd-resid-sr,echo=F,warning=F,fig.width=10,fig.height=10,message=F,fig.cap = "Standard deviation of the log residuals from a) the Ricker S-R Model, and b) the Generalized Additive Models (GAMs)."}
+
+tag <- data.frame(Period = as.factor("Pre 1993"),lab = c("(a)"),Location = "North Sea")
+
+
+
+cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey")
+shapes <- c(rep(21,4),rep(24,4))
+p.sds <- ggplot(dat.sds.sr, aes(x=sd.cod,y=sd.had,fill = Location,shape = Location,color=Location)) + 
+            geom_point(size=4) + facet_wrap(~Period,ncol=1) + 
+            geom_abline(slope=1,intercept = 0) + scale_fill_manual(values = cols)+ 
+            scale_color_manual(values = cols)+scale_shape_manual(values = shapes) +
+            geom_text(data = tag, aes(x=0.1,y=1.8,label=lab),hjust=-0.1,vjust = -1,colour='black',size=6) + 
+            xlab("Cod Standard Deviation  (Ricker model)") + ylab("Haddock Standard Deviation (Ricker model)") +
+            scale_x_continuous(limits=c(0.1,2)) + scale_y_continuous(limits=c(0.1,2)) + 
+            theme(legend.title = element_blank(),legend.position = 'none') 
+
+
+
+sds.cod.gam <- dat.all.mod %>% dplyr::filter(Species == 'Cod') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(gam.resids))
+# Toss Irish Sea Pre 1993 because we don't have a match with Haddock.
+sds.cod.gam <- sds.cod.gam[!(sds.cod.gam$Location == "Irish Sea" & sds.cod.gam$Period == "Pre 1993"),]
+sds.had.gam <- dat.all.mod %>% dplyr::filter(Species == 'Haddock') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(gam.resids))
+names(sds.cod.gam) <- c("Location","Period","sd.cod")
+names(sds.had.gam) <- c("Location","Period","sd.had")
+
+dat.sds.gam <- left_join(sds.cod.gam,sds.had.gam,by = c("Location","Period"))
+
+cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey")
+shapes <- c(rep(21,4),rep(24,4))
+tag <- data.frame(Period = as.factor("Pre 1993"),lab = c("(b)"),Location = "North Sea")
+
+p.sds.gam <- ggplot(dat.sds.gam, aes(x=sd.cod,y=sd.had,fill = Location,shape = Location,color=Location)) + 
+                geom_point(size=4) + facet_wrap(~Period,ncol=1) + 
+                geom_abline(slope=1,intercept = 0) + 
+                scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) +
+                geom_text(data = tag, aes(x=0.1,y=1.8,label=lab),hjust=-0.1,vjust = -1,colour='black',size=6) + 
+                xlab("Cod Standard Deviation (GAM)") + ylab("Haddock Standard Deviation (GAM)") +
+                scale_x_continuous(limits=c(0.1,2)) + scale_y_continuous(limits=c(0.1,2)) +
+                theme(legend.title = element_blank(),legend.position = 'right') 
+
+
+p.sds.combo <- plot_grid(p.sds,p.sds.gam,rel_widths = c(3,4.65))
+p.sds.combo
+save_plot("D:/Github/Haddock/Results/Figure_5_new.png",p.sds.combo,base_height = 8,base_width =11)
+
+```
+
+
+
+\newpage
+
+
+```{r acf-split-sr,echo=F,fig.width=10,fig.height=10,message=F,warning=F,fig.cap ="Autocorrelation of recruitment residuals from Ricker stock recruitment model. For each stock the Pre 1993 period is shown on the left and the Recent period is on the right. The dashed lines show the average correlation for the North West Atlantic (left) and North East Atlantic (right) stocks. The error bars represent the 95//% Confidence Intervals."}
+
+acf.NW <- dat.acf.split %>% 
+                       dplyr::filter(Location %in% c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf"),Model == "Stock Recruit") %>% 
+                       #dplyr::group_by(Period) %>%
+                       dplyr::summarise(mn.cor = mean(Correlation))
+acf.NW <- data.frame(mn.cor = rep(acf.NW$mn.cor,2))
+
+acf.NW$x <- c(0.75,6.25)
+acf.NW$Location <- "Western Scotian Shelf"
+# Note the acf no longer has the period in there, it is the average across regions only to cut down on the number of lines and the 
+# difference between periods was minor, the thing to show is the the correlation is a bit higher in NE Atl.
+acf.NW$Period <- "Recent" # Place holder for ggplot to work only
+
+acf.NE <- dat.acf.split %>% 
+                       dplyr::filter(!Location %in% c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf"),Model == "Stock Recruit") %>% 
+                       #dplyr::group_by(Period) %>%
+                       dplyr::summarise(mn.cor = mean(Correlation,na.rm=T))
+
+acf.NE <- data.frame(mn.cor = rep(acf.NE$mn.cor,2))
+
+acf.NE$x <- c(6.75,16.25)
+acf.NE$Location <- "North Sea"
+# Note the acf no longer has the period in there, it is the average across regions only to cut down on the number of lines and the 
+# difference between periods was minor, the thing to show is the the correlation is a bit higher in NE Atl.
+acf.NE$Period <- "Recent" # Place holder for ggplot to work only
+ 
+cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey")
+shapes <- c(rep(21,4),rep(24,4))
+
+p.acf.split.sr <- ggplot(dat.acf.split %>% dplyr::filter(Model == "Stock Recruit"),aes(y=Correlation,x=Stock,fill = Location,shape = Location,color=Location,group = Period)) +
+                #facet_wrap(~Period,ncol=1) + 
+                geom_point(size=4,position = position_dodge(width = 0.25)) +                 
+                geom_errorbar(aes(ymin =lci,ymax=uci,x = Stock,color=Location),position = position_dodge(width = 0.25),width=0) + 
+                scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+ scale_shape_manual(values = shapes) +
+                geom_line(data = acf.NE, aes(y = mn.cor,x=x),color='purple',linetype='dashed',size=1,alpha = 0.5) + 
+                geom_line(data = acf.NW, aes(y = mn.cor,x=x),color='darkgrey',linetype='dashed',size=1,alpha=0.5) + 
+                scale_y_continuous(limits=c(-1,1))+ 
+                theme(axis.text.x = element_text(angle = 60, hjust = 1,size=16), 
+                      legend.title = element_blank(),legend.position = 'none') + xlab("")
+p.acf.split.sr
+
+save_plot("D:/Github/Haddock/Results/Figure_6_new.png",p.acf.split.sr,base_height = 10,base_width = 20)
+
+
+```
+
+\newpage
+
+
+
+```{r stan-alpha-plot,warning =F,echo=F,fig.width=11,fig.height=8,message=F,fig.cap = "The log of the maximum annual reproductive rate estimated using a) the Ricker stock recruitment model for each stock in the Pre-1993 and Recent period with 95\\% confidence intervals and b) the mean recruitment when SSB is ≤ 0.4 of maximum SSB. The error bars in b) represent 1 standard deviation from the mean (there was insufficient data in the recent period for Western Scotian Shelf Haddock to calculate the standard deviation)."}
+
+# This is super ugly....
+dat.cur <- NULL;dat.past <- NULL
+for(i in 1:n.stocks) dat.cur[[stocks[i]]] <- dat.alpha[dat.alpha$Period == "Recent" & dat.alpha$Stock  == stocks[i],][1,]
+for(i in 1:n.stocks) dat.past[[stocks[i]]] <- dat.alpha[dat.alpha$Period == "Pre 1993" & dat.alpha$Stock  == stocks[i],][1,]
+
+dat.cur <- do.call('rbind',dat.cur)
+dat.past <- do.call('rbind',dat.past)
+dat.tmp <- rbind(dat.cur,dat.past)
+d.alp <- dat.tmp %>% dplyr::select(Species,Location,alpha,alpha.sd,LCI,UCI,Stock,Period)
+# Here we add in the SPR correction so we can make that figure.
+d.alp <- left_join(d.alp,spr.dat,by = c("Period","Location","Species"))
+
+d.alp$alpha.stan <- log(exp(d.alp$alpha)*d.alp$SBPR*d.alp$M.avg)
+d.alp$UCI.as <- log(exp(d.alp$alpha+1.96 *d.alp$alpha.sd)*d.alp$SBPR*d.alp$M.avg)
+d.alp$LCI.as <- log(exp(d.alp$alpha - 1.96 *d.alp$alpha.sd)*d.alp$SBPR*d.alp$M.avg)
+d.alp <- d.alp[!is.na(d.alp$Species),]
+d.alp <- d.alp %>% dplyr::select(Species,Location,alpha.stan,LCI.as,UCI.as,Stock,Period)
+d.had <- d.alp[d.alp$Species == "Haddock",]
+#d.had <- d.had[!is.na(d.had$Species),]
+
+d.cod <- d.alp[d.alp$Species == "Cod",]
+#d.cod <- d.cod[!is.na(d.cod$Species),]
+d.cod <- d.cod[!(d.cod$Location == "Irish Sea" & d.cod$Period == "Pre 1993"),]
+
+names(d.had) <- c("Species","Location","alpha.had","LCI.had","UCI.had",'Stock','Period')
+names(d.cod) <- c("Species","Location","alpha.cod","LCI.cod","UCI.cod",'Stock',"Period")
+d.merge <- data.frame(Location = d.had$Location, 
+                      Period = d.had$Period,
+                      alpha.had = d.had$alpha.had,
+                      LCI.had = d.had$LCI.had,
+                      UCI.had = d.had$UCI.had,
+                      alpha.cod = d.cod$alpha.cod,
+                      LCI.cod = d.cod$LCI.cod,
+                      UCI.cod = d.cod$UCI.cod)
+d.merge <- d.merge %>% dplyr::filter(Location != "Irish Sea")
+# Order these like Fogarty
+d.merge$Location  <- factor(d.merge$Location, levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+                              
+#c("North Sea","Faroese","Barents Sea","Iceland","Eastern Scotian Shelf","Western Scotian Shelf","Eastern Georges Bank"))
+
+
+cols <- c("blue","firebrick2","green","grey","blue","green","grey")
+shapes <- c(rep(21,4),rep(24,3))
+tag <- data.frame(Period = as.factor("Pre 1993"),lab = c("(a)"),Location = "North Sea")
+
+# SO this is the wrong figure, cause I want to make this plot using the SD of the residuals from the SR.  
+# But maybe I want to make a plot using these somehow....
+alpha.stan.plt <- ggplot(d.merge,aes(y = alpha.had,x=alpha.cod,fill = Location,shape = Location,color=Location)) + 
+     geom_point(size=4) + facet_wrap(~Period,ncol=1) +
+     geom_errorbar(aes(ymin=LCI.had,ymax=UCI.had)) +
+     geom_errorbarh(aes(xmin = LCI.cod,xmax=UCI.cod)) +
+     scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) +
+     geom_abline(slope=1,intercept = 0) + 
+     geom_text(data = tag, aes(x=-2.7,y=2.7,label=lab),colour='black',size=6) + 
+     xlim(c(-3,3)) + ylim(c(-3.2,3)) + 
+     xlab(expression(Cod~standardized~log*"("*alpha*")")) + ylab(expression(Haddock~standardized~log*"("*alpha*")")) + 
+     theme(legend.title = element_blank(),legend.position = 'none')
+
+
+
+cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey")
+shapes <- c(rep(21,4),rep(24,4))
+tag <- data.frame(Period = as.factor("Pre 1993"),lab = c("(b)"),Location = "North Sea")
+alpha.40.plt <- ggplot(dat.40.alpha,aes(y = alpha.40.had,x=alpha.40.cod,fill = Location,shape = Location,color=Location)) + 
+     geom_point(size=4) + facet_wrap(~Period,ncol=1) +
+     geom_errorbar(aes(ymin=lci.40.had,ymax=uci.40.had)) +
+     geom_errorbarh(aes(xmin = lci.40.cod,xmax=uci.40.cod)) +
+     scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) +
+     geom_abline(slope=1,intercept = 0) + 
+     geom_text(data = tag, aes(x=-2.7,y=2.7,label=lab),colour='black',size=6) + 
+     xlim(c(-3,3)) + ylim(c(-3.2,3)) + 
+     xlab("Cod MARR") + ylab("Haddock MARR")+
+     theme(legend.title = element_blank(),legend.position = 'right')
+
+alpha.plt <- plot_grid(alpha.stan.plt,alpha.40.plt,rel_widths = c(3,4.65))
+alpha.plt
+
+save_plot("D:/Github/Haddock/Results/Figure_7_new.png",alpha.plt,base_height = 8,base_width = 11)
+
+
+```
+
+
+
+```{r,diff-plts,echo=F,warning=F,fig.width=10,fig.height=10,message=F,fig.cap = "The change in the Standard Deviation of the Residuals between the Recent and Pre 1993 period for the a) Ricker S-R Model, and b) Generalized Additive Models (GAMs). The change in the alpha estimates between the Recent and Pre 1993 period for the c) Ricker S-R Model, and d) alpha at 40% of maximum SSB.  Positive values indicate the estimate in the Recent period was larger than Pre 1993 period."}
+
+# Then you can make a similar figure, but here I think we are interested in quadrants...
+diff.sr <- dat.sds.sr %>% dplyr::group_by(Location) %>% dplyr::summarise(diff.cod = diff(sd.cod),
+                                                                         diff.had = diff(sd.had))
+
+diff.sr[8,] <- NA
+diff.sr$Location[8] <- "Irish Sea"
+diff.gam <- dat.sds.gam %>% dplyr::group_by(Location) %>% dplyr::summarise(diff.cod = diff(sd.cod),
+                                                                           diff.had = diff(sd.had))
+diff.gam[8,] <- NA
+diff.gam$Location[8] <- "Irish Sea"
+
+cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey")
+shapes <- c(rep(21,4),rep(24,4))
+tag <- data.frame(lab = c("(a)"),Location = "North Sea")
+
+
+
+diff.sr.plt <- ggplot(diff.sr) + geom_point(aes(x=diff.cod,y=diff.had,fill = Location,shape = Location,color=Location),size=4) + 
+                  geom_hline(yintercept = 0,linetype = 'dashed') + geom_vline(xintercept = 0,linetype='dashed')+
+                  xlab(expression(Delta~Cod~Standard~Deviation~Ricker~Model)) + ylab(expression(Delta~Haddock~Standard~Deviation~Ricker~Model)) + 
+                  scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) +
+                  geom_text(data = tag, aes(x=-0.3,y=0.44,label=lab),hjust=-0.1,vjust = -1,colour='black',size=6) +  
+                  xlim(c(-0.3,0.3)) + ylim(c(-0.52,0.5)) + 
+                  theme(legend.title = element_blank(),legend.position = 'none') 
+
+tag <- data.frame(lab = c("(b)"),Location = "North Sea")
+
+diff.gam.plt <- ggplot(diff.gam) + geom_point(aes(x=diff.cod,y=diff.had,fill = Location,shape = Location,color=Location),size=4) + 
+                  geom_hline(yintercept = 0,linetype = 'dashed') + geom_vline(xintercept = 0,linetype='dashed')+
+                  xlab(expression(Delta~Cod~Standard~Deviation~GAM)) + ylab(expression(Delta~Haddock~Standard~Deviation~GAM)) +
+                  scale_fill_manual(values = cols) + scale_color_manual(values = cols) + scale_shape_manual(values = shapes) +
+                  geom_text(data = tag, aes(x=-0.3,y=0.44,label=lab),hjust=-0.1,vjust = -1,colour='black',size=6) + 
+                  xlim(c(-0.3,0.3)) + ylim(c(-0.52,0.5)) + 
+                  theme(legend.title = element_blank(),legend.position = 'right') 
+
+
+# Then you can make a similar figure, but here I think we are interested in quadrants...
+# Note that d.merge does the subtraction as Pre-Recent because how it's ordered, so added a negative here to make it correct.
+diff.alpha <- d.merge %>% dplyr::group_by(Location) %>% dplyr::summarise(diff.cod = -diff(alpha.cod),
+                                                                         diff.had = -diff(alpha.had))
+
+diff.alpha[8,] <- NA
+diff.sr$Location[8] <- "Irish Sea"
+# Now the 40% alphas
+diff.alpha.40 <- dat.40.alpha %>% dplyr::group_by(Location) %>% dplyr::summarise(diff.cod = diff(alpha.40.cod),
+                                                                            diff.had = diff(alpha.40.had))
+cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey")
+shapes <- c(rep(21,4),rep(24,4))
+tag <- data.frame(lab = c("(c)"),Location = "North Sea")
+
+
+
+diff.alpha.plt <- ggplot(diff.alpha) + geom_point(aes(x=diff.cod,y=diff.had,fill = Location,shape = Location,color=Location),size=4) + 
+                    geom_hline(yintercept = 0,linetype = 'dashed') + geom_vline(xintercept = 0,linetype='dashed')+
+                    xlab(expression(Delta~Cod~"log(" * alpha*")(Ricker Model)")) + 
+                    ylab(expression(Delta~Haddock~ "log(" * alpha*")(Ricker Model)")) + 
+                    scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) +
+                    geom_text(data = tag, aes(x=-2.4,y=1.8,label=lab),hjust=-0.1,vjust = -1,colour='black',size=6) +  
+                    xlim(c(-2.4,2)) + ylim(c(-2.4,2)) + 
+                    theme(legend.title = element_blank(),legend.position = 'none') 
+
+tag <- data.frame(lab = c("(d)"),Location = "North Sea")
+
+diff.alpha.40.plt<- ggplot(diff.alpha.40) + geom_point(aes(x=diff.cod,y=diff.had,fill = Location,shape = Location,color=Location),size=4) + 
+                      geom_hline(yintercept = 0,linetype = 'dashed') + geom_vline(xintercept = 0,linetype='dashed')+
+                      xlab(expression(Delta ~ Cod ~ "log(" * alpha*") (MARR)")) + ylab(expression(Delta~Haddock~ "log(" * alpha*") (MARR)")) +
+                      scale_fill_manual(values = cols) + scale_color_manual(values = cols) + scale_shape_manual(values = shapes) +
+                      geom_text(data = tag, aes(x=-2.4,y=1.8,label=lab),hjust=-0.1,vjust = -1,colour='black',size=6) + 
+                      xlim(c(-2.4,2)) + ylim(c(-2.4,2)) + 
+                      theme(legend.key = element_rect(fill = "white"), 
+                      legend.text = element_text(color = "white"), 
+                      legend.title = element_text(color = "white"),
+                      legend.position = 'right') +
+                      guides(color = guide_legend(override.aes = list(color = NA,fill=NA)))
+                     
+
+
+diff.plt <- plot_grid(diff.sr.plt,diff.gam.plt,
+                      diff.alpha.plt,diff.alpha.40.plt,
+                      rel_widths = c(3,4.65))
+diff.plt
+
+
+save_plot("D:/Github/Haddock/Results/Figure_X_Diff_plots.png",diff.plt,base_height = 11,base_width =11)
+
+```
+
+
+
+\newpage
+
+
+```{r hist-rec-ssb, echo = F,fig.width=11,fig.height=11,message=F,fig.cap = "Density plots of the SSB values by each period as percentage of the maximum for the whole time series. Vertical grey dashed line is  0.2 of maximum SSB while the grey solid vertical line is 0.4. Note that for the cod on the Eastern George Bank and the Western Scotian shelf, in the Pre 1993 period, all SSB values were above 40% of the maximum values. "}
+
+p.freq <- ggplot(data = dat.all.mod) + geom_freqpoly(aes(x = ssb.prop,color=Period),position='stack',bins=10,size=2) + scale_color_manual(values = c("blue","firebrick2"))+
+              facet_wrap(~Stock) + geom_vline(xintercept = 0.2,color='grey',linetype='dashed',size=1.5) + geom_vline(xintercept = 0.4,color='grey',size=1.25) + 
+              xlab("Proportion of Max SSB")
+p.freq
+
+save_plot("D:/Github/Haddock/Results/Figure_8.png",p.freq,base_height = 9,base_width = 12)
+
+```
+
+
+
+
+
+
+# Appendix
+
+
+
+```{r acf-split-gam,echo=F,fig.width=11,fig.height=11,message=F,warning=F,fig.cap ="Autocorrelation of recruitment residuals from GAMs in each Period."}
+
+
+
+acf.NW <- dat.acf.split %>% 
+                       dplyr::filter(Location %in% c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf"),Model == "Stock Recruit") %>% 
+                       #dplyr::group_by(Period) %>%
+                       dplyr::summarise(mn.cor = mean(Correlation))
+acf.NW <- data.frame(mn.cor = rep(acf.NW$mn.cor,2))
+
+acf.NW$x <- c(0.75,6.25)
+acf.NW$Location <- "Western Scotian Shelf"
+# Note the acf no longer has the period in there, it is the average across regions only to cut down on the number of lines and the 
+# difference between periods was minor, the thing to show is the the correlation is a bit higher in NE Atl.
+acf.NW$Period <- "Recent" # Place holder for ggplot to work only
+
+acf.NE <- dat.acf.split %>% 
+                       dplyr::filter(!Location %in% c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf"),Model == "Stock Recruit") %>% 
+                       #dplyr::group_by(Period) %>%
+                       dplyr::summarise(mn.cor = mean(Correlation,na.rm=T))
+
+acf.NE <- data.frame(mn.cor = rep(acf.NE$mn.cor,2))
+
+acf.NE$x <- c(6.75,16.25)
+acf.NE$Location <- "North Sea"
+# Note the acf no longer has the period in there, it is the average across regions only to cut down on the number of lines and the 
+# difference between periods was minor, the thing to show is the the correlation is a bit higher in NE Atl.
+acf.NE$Period <- "Recent" # Place holder for ggplot to work only
+ 
+cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey")
+shapes <- c(rep(21,4),rep(24,4))
+
+
+p.acf.split.gam <- ggplot(dat.acf.split %>% dplyr::filter(Model == "GAM"),
+                              aes(y=Correlation,x=Stock,fill = Location,shape = Location,color=Location,group = Period)) +
+                #facet_wrap(~Period,ncol=1) + 
+                geom_point(size=4,position = position_dodge(width = 0.25)) +                 
+                geom_errorbar(aes(ymin =lci,ymax=uci,x = Stock,color=Location),position = position_dodge(width = 0.25),width=0) + 
+                scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+ scale_shape_manual(values = shapes) +
+                geom_line(data = acf.NE, aes(y = mn.cor,x=x),color='purple',linetype='dashed',size=1,alpha = 0.5) + 
+                geom_line(data = acf.NW, aes(y = mn.cor,x=x),color='darkgrey',linetype='dashed',size=1,alpha=0.5) + 
+                scale_y_continuous(limits=c(-1,1))+ 
+                theme(axis.text.x = element_text(angle = 60, hjust = 1,size=16), 
+                      legend.title = element_blank(),legend.position = 'none') + xlab("")
+p.acf.split.gam
+
+
+save_plot("D:/Github/Haddock/Results/Figure_A1_new.png",p.acf.split.gam,base_height = 10,base_width = 20)
+
+
+```
+
+
+<!-- Here we have the probability distribution of the Ricker Residuals... point here is to show differences between Haddock Residuals and Cod residuals -->
+
+```{r sr-resid-pd-plot,warning =F,echo=F,fig.width=11,fig.height=8,message=F,fig.cap = "Residuals from the Ricker Stock recruitment model."}
+
+tst <- dat.all.mod %>% dplyr::group_by(Location,Species) %>% dplyr::summarise(median = mean(resids))
+cols <- c("firebrick1","darkblue")
+lty <- c("solid","dashed")
+
+sr.pd.resid.plt <- ggplot(dat.all.mod ,aes(x=resids, fill =  Species)) +    
+              geom_density(alpha=0.5) + 
+              facet_wrap(~Location ,ncol=4,scales = 'free_y') + xlab("Residuals (Ricker)") + ylab("")  + 
+              scale_fill_manual(values = cols) +
+              theme(axis.title.y = element_text(hjust=0.25),
+                    #legend.position = c(0.85, 0.15), 
+                    legend.title.align=1,
+                    legend.text.align = 1,
+                    legend.title = element_text(size=16),
+                    legend.text = element_text(size=12),
+                    #legend.key.size = unit(3,"line"),
+                    legend.key.width = unit(3,"cm")) 
+
+
+sr.pd.resid.plt
+save_plot(plot = sr.pd.resid.plt,filename = "D:/Github/Haddock/Results/Figure_A2.png",base_height = 8.5,base_width =11)
+
+```
+
+
+\newpage
+
+
+
+# Here's an appendix analysis where we just use the same years of data for a couple of the analyses.  
+```{r same-years,include=F,echo=F,warning=F}
+
+# Let's focus on the stocks we have good long time series for in this, so I think Irish Sea and ESS both go away and we focus on the rest of the stocks.
+
+yr.ranges <- dat %>% dplyr::group_by(Stock) %>% dplyr::summarise(first.year = min(year),
+                                                                 last.year = max(year))
+
+#So if we go 1985-2013 we keep everything except ESS and Irish Sea, decent...
+dat.sub.yrs <- dat %>% dplyr:::filter(!Location %in% c("Irish Sea", "Eastern Scotian Shelf"), year %in% 1985:2013)
+# OK, so now we can basically re-run what we want to re-run in the above. First let's do the cross correlation within regions
+# So for Canada all we have left is WSS and EGB...
+cod.egb <- dat.sub.yrs %>% dplyr::filter(Species == "Cod",Location %in% c("Eastern Georges Bank"))
+cod.wss <- dat.sub.yrs %>% dplyr::filter(Species == "Cod",Location %in% c("Western Scotian Shelf"))
+had.egb <- dat.sub.yrs %>% dplyr::filter(Species == "Haddock",Location %in% c("Eastern Georges Bank"))
+had.wss <- dat.sub.yrs %>% dplyr::filter(Species == "Haddock",Location %in% c("Western Scotian Shelf"))
+
+# So we see high correlation between EGB and WSS recruitment for cod and Haddock. No big surprise as they are pretty much the same stock...
+cod.egb.vs.wss <- cor.test(cod.egb$l.rec,cod.wss$l.rec)$estimate
+had.egb.vs.wss <- cor.test(had.egb$l.rec,had.wss$l.rec)$estimate
+
+# For ICES we can compare Ice with Fareose first...
+cod.ice <- dat.sub.yrs %>% dplyr::filter(Species == "Cod",Location %in% c("Iceland"))
+cod.far <- dat.sub.yrs %>% dplyr::filter(Species == "Cod",Location %in% c("Faroese"))
+had.ice <- dat.sub.yrs %>% dplyr::filter(Species == "Haddock",Location %in% c("Iceland"))
+had.far <- dat.sub.yrs %>% dplyr::filter(Species == "Haddock",Location %in% c("Faroese"))
+
+# So we see very little correlation between Iceland and the Faroese
+cod.ice.vs.far <- cor.test(cod.ice$l.rec,cod.far$l.rec)$estimate
+had.ice.vs.far <- cor.test(had.ice$l.rec,had.far$l.rec)$estimate
+
+# Now Iceland and North Sea
+cod.ns <- dat.sub.yrs %>% dplyr::filter(Species == "Cod",Location %in% c("North Sea"))
+had.ns <- dat.sub.yrs %>% dplyr::filter(Species == "Haddock",Location %in% c("North Sea"))
+
+# So we see very little correlation between Iceland and the NS
+cod.ice.vs.ns <- cor.test(cod.ice$l.rec,cod.ns$l.rec)$estimate
+had.ice.vs.ns <- cor.test(had.ice$l.rec,had.ns$l.rec)$estimate
+
+# Finally Ice and Barents Sea
+cod.bs <- dat.sub.yrs %>% dplyr::filter(Species == "Cod",Location %in% c("Barents Sea"))
+had.bs <- dat.sub.yrs %>% dplyr::filter(Species == "Haddock",Location %in% c("Barents Sea"))
+
+# So we see very little correlation between Iceland and the BS
+cod.ice.vs.bs <- cor.test(cod.ice$l.rec,cod.bs$l.rec)$estimate
+had.ice.vs.bs <- cor.test(had.ice$l.rec,had.bs$l.rec)$estimate
+
+# So Now let's do Farose with NS, looks like they might be weakly correlated.
+cod.ns.vs.far <- cor.test(cod.ns$l.rec,cod.far$l.rec)$estimate
+had.ns.vs.far <- cor.test(had.ns$l.rec,had.far$l.rec)$estimate
+
+# So Now let's do Farose with BS, if anything weakly negatively correlated
+cod.bs.vs.far <- cor.test(cod.bs$l.rec,cod.far$l.rec)$estimate
+had.bs.vs.far <- cor.test(had.bs$l.rec,had.far$l.rec)$estimate
+
+# Last one I think is NS and BS right? And again hardly anything.
+cod.bs.vs.ns <- cor.test(cod.bs$l.rec,cod.ns$l.rec)$estimate
+had.bs.vs.ns <- cor.test(had.bs$l.rec,had.ns$l.rec)$estimate
+
+# So we see correlation in recruitment between WSS and EGB, but not really anywhere else, maybe slight correlation with NS and Faroese.
+# I think we could make this a supplemental table perhaps.
+
+cross.cor.tab <- data.frame(Regions = c("Eastern Georges Bank and Western Scotian Shelf",
+                                        "Iceland and Faroese",
+                                        "Iceland and North Sea",
+                                        "Iceland and Barents Sea",
+                                        "Faroese and North Sea",
+                                        "Faroses and Barents Sea",
+                                        "North Sea and Barents Sea"),
+                            Haddock = signif(c(had.egb.vs.wss,
+                                        had.ice.vs.far,
+                                        had.ice.vs.ns,
+                                        had.ice.vs.bs,
+                                        had.ns.vs.far,
+                                        had.bs.vs.far,
+                                        had.bs.vs.ns),digits =1),
+                            Cod =     signif(c(cod.egb.vs.wss,
+                                        cod.ice.vs.far,
+                                        cod.ice.vs.ns,
+                                        cod.ice.vs.bs,
+                                        cod.ns.vs.far,
+                                        cod.bs.vs.far,
+                                        cod.bs.vs.ns),digits=2))
+
+
+cross.cor.table <- knitr::kable(cross.cor.tab)
+
+
+
+# Next up we'll fit the Ricker and GAMs to this subset of data and look at the SD of the residuals and the alphas.
+dat.sub.pre <- dat.sub.yrs %>% dplyr::filter(Period == 'Pre 1993')
+dat.sub.recent <- dat.sub.yrs %>% dplyr::filter(Period == 'Recent')
+dat.sub <- NULL
+# Get the stocks ready for the loop
+stocks <- unique(dat.sub.pre$Stock)
+n.stocks <- length(stocks)
+# And run the S-R model for each stock/era individually.
+
+# This is the analysis for the Alpha calculations.
+for(i in 1:n.stocks)
+{
+  # Filter the data into the pre and recent periods for the alpha analysis
+  pre.d <- dat.sub.pre %>% filter(Stock == stocks[i])
+  recent.d <-        dat.sub.recent %>% filter(Stock == stocks[i])
+  # Now run the models, but only run if you have data (i.e. Irish pre Cod has not data)
+  if(nrow(pre.d) > 0) mod.pre <-   lm(log.r.ssb ~ ssb, data= pre.d)
+  mod.recent <-      lm(log.r.ssb ~ ssb, data= recent.d)
+  # Now stick the data back into the data frames, first the alphas and their Standard Deviation from the model
+  if(nrow(pre.d) > 0) 
+  {
+    dat.sub.pre$alpha[dat.sub.pre$Stock == stocks[i]] <- coefficients(mod.pre)[1]
+    dat.sub.pre$alpha.sd[dat.sub.pre$Stock == stocks[i]] <- summary(mod.pre)$coefficients[1,2]
+    dat.sub.pre$r2[dat.sub.pre$Stock == stocks[i]] <- summary(mod.pre)$r.squared[1]
+  }
+  dat.sub.recent$alpha[dat.sub.recent$Stock == stocks[i]] <- coefficients(mod.recent)[1]
+  dat.sub.recent$alpha.sd[dat.sub.recent$Stock == stocks[i]] <- summary(mod.recent)$coefficients[1,2]
+  dat.sub.recent$r2[dat.sub.recent$Stock == stocks[i]] <- summary(mod.recent)$r.squared[1]
+
+  # Now the residuals
+  if(nrow(pre.d) > 0) dat.sub.pre$resids[dat.sub.pre$Stock == stocks[i]] <- residuals(mod.pre)
+  dat.sub.recent$resids[dat.sub.recent$Stock == stocks[i]] <-    residuals(mod.recent)
+  
+  # Now we also have a model which fits the full time series of the Ricker model, this is the one we are going to use for the residual figures and the ACF calculations.
+  dat.tmp <- dat %>% filter(Stock == stocks[i])
+  mod.all <- lm(log.r.ssb ~ ssb, data= dat.tmp)
+  dat.tmp$alpha <- as.numeric(coefficients(mod.all)[1])
+  dat.tmp$alpha.sd <- summary(mod.all)$coefficients[1,2]
+  dat.tmp$resids <- residuals(mod.all)
+  dat.tmp$r2 <-  summary(mod.all)$r.squared[1]
+  dat.sub[[stocks[i]]] <- dat.tmp
+}
+
+
+# So North Sea Haddock and Western SS Haddock are both wild... Let's look closer at them...
+dat.sub.alpha <- bind_rows(dat.sub.pre,dat.sub.recent)
+dat.sub.alpha$alpha.exp <- exp(dat.sub.alpha$alpha)
+dat.sub.alpha$LCI <- dat.sub.alpha$alpha - 1.96 *dat.sub.alpha$alpha.sd
+dat.sub.alpha$UCI <- dat.sub.alpha$alpha + 1.96 *dat.sub.alpha$alpha.sd
+
+# Now we do the same thing for what I'll call dat.sub.mod, which is ricker fit to full time series.  This is where we'll want to house all the residuals
+dat.sub.mod <- do.call('rbind',dat.sub)
+dat.sub.mod$alpha.exp <- exp(dat.sub.mod$alpha)
+dat.sub.mod$LCI <- dat.sub.mod$alpha - 1.96 *dat.sub.mod$alpha.sd
+dat.sub.mod$UCI <- dat.sub.mod$alpha + 1.96 *dat.sub.mod$alpha.sd
+
+# Set up the levels for the Locations Georgraphically instead of Fogartys way.
+
+dat.sub.mod$Location  <- factor(dat.sub.mod$Location, levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+
+#c("North Sea","Irish Sea","Faroese","Barents Sea","Iceland","Eastern Scotian Shelf","Western Scotian Shelf","Eastern Georges Bank"))
+
+# Now moving to the GAM models and looking at those residuals...
+dat.sub.mod$gam.resids <- NA
+for(i in 1:n.stocks)
+{
+  dat.gam <- dat.sub.mod %>% filter(Stock == stocks[i])
+  mod.gam <- gam(log.r.ssb ~ year, data= dat.gam)
+  dat.sub.mod$gam.resids[dat.sub.mod$Stock == stocks[i]] <-    residuals(mod.gam)
+}
+
+
+```
+
+```{r sd-resid-append-sr,echo=F,warning=F,fig.width=10,fig.height=10,message=F,fig.cap = "Standard deviation of the log residuals from a) the Ricker S-R Model, and b) the Generalized Additive Models (GAMs) using data from 1985-2013."}
+
+tag <- data.frame(Period = as.factor("Pre 1993"),lab = c("(a)"),Location = "North Sea")
+
+
+sds.cod.sr <- dat.sub.mod %>% dplyr::filter(Species == 'Cod') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(resids))
+# Toss Irish Sea Pre 1993 because we don't have a match with Haddock.
+sds.cod.sr <- sds.cod.sr[!(sds.cod.sr$Location == "Irish Sea" & sds.cod.sr$Period == "Pre 1993"),]
+sds.had.sr <- dat.sub.mod %>% dplyr::filter(Species == 'Haddock') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(resids))
+names(sds.cod.sr) <- c("Location","Period","sd.cod")
+names(sds.had.sr) <- c("Location","Period","sd.had")
+# Reorder the Locations to match (or come close to matching) Fogarty
+dat.sds.sr <- left_join(sds.cod.sr,sds.had.sr,by = c("Location","Period"))
+
+
+cols <- c("blue","firebrick2","grey","blue","green","grey")
+shapes <- c(rep(21,3),rep(24,3))
+p.sds <- ggplot(dat.sds.sr, aes(x=sd.cod,y=sd.had,fill = Location,shape = Location,color=Location)) + 
+            geom_point(size=4) + facet_wrap(~Period,ncol=1) + 
+            geom_abline(slope=1,intercept = 0) + scale_fill_manual(values = cols)+ 
+            scale_color_manual(values = cols)+scale_shape_manual(values = shapes) +
+            geom_text(data = tag, aes(x=0.1,y=1.8,label=lab),hjust=-0.1,vjust = -1,colour='black',size=6) + 
+            xlab("Cod Standard Deviation  (Ricker model)") + ylab("Haddock Standard Deviation (Ricker model)") +
+            scale_x_continuous(limits=c(0.1,2)) + scale_y_continuous(limits=c(0.1,2)) + 
+            theme(legend.title = element_blank(),legend.position = 'none') 
+
+
+
+sds.cod.gam <- dat.sub.mod %>% dplyr::filter(Species == 'Cod') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(gam.resids))
+# Toss Irish Sea Pre 1993 because we don't have a match with Haddock.
+sds.cod.gam <- sds.cod.gam[!(sds.cod.gam$Location == "Irish Sea" & sds.cod.gam$Period == "Pre 1993"),]
+sds.had.gam <- dat.sub.mod %>% dplyr::filter(Species == 'Haddock') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(gam.resids))
+names(sds.cod.gam) <- c("Location","Period","sd.cod")
+names(sds.had.gam) <- c("Location","Period","sd.had")
+
+dat.sds.gam <- left_join(sds.cod.gam,sds.had.gam,by = c("Location","Period"))
+
+cols <- c("blue","firebrick2","grey","blue","green","grey")
+shapes <- c(rep(21,3),rep(24,3))
+tag <- data.frame(Period = as.factor("Pre 1993"),lab = c("(b)"),Location = "North Sea")
+
+p.sds.gam <- ggplot(dat.sds.gam, aes(x=sd.cod,y=sd.had,fill = Location,shape = Location,color=Location)) + 
+                geom_point(size=4) + facet_wrap(~Period,ncol=1) + 
+                geom_abline(slope=1,intercept = 0) + 
+                scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) +
+                geom_text(data = tag, aes(x=0.1,y=1.8,label=lab),hjust=-0.1,vjust = -1,colour='black',size=6) + 
+                xlab("Cod Standard Deviation (GAM)") + ylab("Haddock Standard Deviation (GAM)") +
+                scale_x_continuous(limits=c(0.1,2)) + scale_y_continuous(limits=c(0.1,2)) +
+                theme(legend.title = element_blank(),legend.position = 'right') 
+
+
+p.sds.combo.app <- plot_grid(p.sds,p.sds.gam,rel_widths = c(3,4.65))
+p.sds.combo.app
+save_plot("D:/Github/Haddock/Results/Figure_sds_appendix.png",p.sds.combo.app,base_height = 8,base_width =11)
+```
+
+
+```{r stan-alpha-appen-plot,warning =F,echo=F,fig.width=11,fig.height=8,message=F,fig.cap = "The log of the maximum annual reproductive rate estimated using a) the Ricker stock recruitment model for each stock in the Pre-1993 and Recent period with 95\\% confidence intervals and b) the mean recruitment when SSB is ≤ 0.4 of maximum SSB using the subset of stocks with data from 1985-2013. The error bars in b) represent 1 standard deviation from the mean (there was insufficient data in the recent period for Western Scotian Shelf Haddock to calculate the standard deviation)."}
+
+# This is super ugly....
+dat.cur <- NULL;dat.past <- NULL
+for(i in 1:n.stocks) dat.cur[[stocks[i]]] <- dat.sub.alpha[dat.sub.alpha$Period == "Recent" & dat.sub.alpha$Stock  == stocks[i],][1,]
+for(i in 1:n.stocks) dat.past[[stocks[i]]] <- dat.sub.alpha[dat.sub.alpha$Period == "Pre 1993" & dat.sub.alpha$Stock  == stocks[i],][1,]
+
+dat.cur <- do.call('rbind',dat.cur)
+dat.past <- do.call('rbind',dat.past)
+dat.tmp <- rbind(dat.cur,dat.past)
+d.alp <- dat.tmp %>% dplyr::select(Species,Location,alpha,alpha.sd,LCI,UCI,Stock,Period)
+# Here we add in the SPR correction so we can make that figure.
+d.alp <- left_join(d.alp,spr.dat,by = c("Period","Location","Species"))
+
+d.alp$alpha.stan <- log(exp(d.alp$alpha)*d.alp$SBPR*d.alp$M.avg)
+d.alp$UCI.as <- log(exp(d.alp$alpha+1.96 *d.alp$alpha.sd)*d.alp$SBPR*d.alp$M.avg)
+d.alp$LCI.as <- log(exp(d.alp$alpha - 1.96 *d.alp$alpha.sd)*d.alp$SBPR*d.alp$M.avg)
+d.alp <- d.alp[!is.na(d.alp$Species),]
+d.alp <- d.alp %>% dplyr::select(Species,Location,alpha.stan,LCI.as,UCI.as,Stock,Period)
+d.had <- d.alp[d.alp$Species == "Haddock",]
+#d.had <- d.had[!is.na(d.had$Species),]
+
+d.cod <- d.alp[d.alp$Species == "Cod",]
+#d.cod <- d.cod[!is.na(d.cod$Species),]
+d.cod <- d.cod[!(d.cod$Location == "Irish Sea" & d.cod$Period == "Pre 1993"),]
+
+names(d.had) <- c("Species","Location","alpha.had","LCI.had","UCI.had",'Stock','Period')
+names(d.cod) <- c("Species","Location","alpha.cod","LCI.cod","UCI.cod",'Stock',"Period")
+d.merge <- data.frame(Location = d.had$Location, 
+                      Period = d.had$Period,
+                      alpha.had = d.had$alpha.had,
+                      LCI.had = d.had$LCI.had,
+                      UCI.had = d.had$UCI.had,
+                      alpha.cod = d.cod$alpha.cod,
+                      LCI.cod = d.cod$LCI.cod,
+                      UCI.cod = d.cod$UCI.cod)
+d.merge <- d.merge %>% dplyr::filter(Location != "Irish Sea")
+# Order these like Fogarty
+d.merge$Location  <- factor(d.merge$Location, levels = c("Eastern Georges Bank","Western Scotian Shelf","Eastern Scotian Shelf","Iceland","Faroese","Irish Sea","North Sea","Barents Sea"))
+                              
+#c("North Sea","Faroese","Barents Sea","Iceland","Eastern Scotian Shelf","Western Scotian Shelf","Eastern Georges Bank"))
+
+
+cols <- c("blue","firebrick2","grey","blue","green","grey")
+shapes <- c(rep(21,3),rep(24,3))
+#tag <- data.frame(Period = as.factor("Pre 1993"),lab = c("(a)"),Location = "North Sea")
+
+# SO this is the wrong figure, cause I want to make this plot using the SD of the residuals from the SR.  
+# But maybe I want to make a plot using these somehow....
+alpha.plt <- ggplot(d.merge,aes(y = alpha.had,x=alpha.cod,fill = Location,shape = Location,color=Location)) + 
+     geom_point(size=4) + facet_wrap(~Period,ncol=1) +
+     geom_errorbar(aes(ymin=LCI.had,ymax=UCI.had)) +
+     geom_errorbarh(aes(xmin = LCI.cod,xmax=UCI.cod)) +
+     scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) +
+     geom_abline(slope=1,intercept = 0) + 
+     #geom_text(data = tag, aes(x=-2.7,y=2.7,label=lab),colour='black',size=6) + 
+     xlim(c(-3,3)) + ylim(c(-5,8)) + 
+     xlab(expression(Cod~standardized~log*"("*alpha*")")) + ylab(expression(Haddock~standardized~log*"("*alpha*")")) + 
+     theme(legend.title = element_blank(),legend.position = 'right')
+
+alpha.plt
+
+
+save_plot("D:/Github/Haddock/Results/Figure_alpha_appendix.png",alpha.plt,base_height = 8,base_width = 8)
+
+
+```
+
+
+
+Table A1:  The cross-correlation of the recruitment indices (log scale) between stocks found in the Northwest and Northeast Atlantic using years in which data is available for each of the stocks (1985-20213).  Due to data limitations Eastern Scotian Shelf and Irish Sea stocks were excluded from this analysis.
+
+```{r cross-tab, echo = F,fig.width=11,fig.height=11,message=F,fig.cap = ""}
+
+cross.cor.table
+
+```
+
+
+
+
+
+**The fits of the Ricker S-R model, first is the one with two periods**
+
+```{r rssb-ssb-setup, echo =F,include =F,message=F}
+
+# Now the Rec/SSB vs SSB figure, with a line of best fit, not ugly at all....
+p0 <- ggplot(dat %>% dplyr::filter(Region == "Northeast Atlantic"),aes(y=rec.ssb, x= ssb,colour = Period,shape = Species,linetype = Species)) + geom_point(size=2) + 
+              facet_wrap(~Location ,scales = 'free_x',ncol=3) + xlab("") + ylab("Recruits/SSB")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + scale_y_log10() + 
+              geom_smooth(method = 'lm') + scale_x_continuous(limits = c(0,NA)) +
+#              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+#              geom_vline(xintercept = 1992.5,color = "grey",size =2) + 
+              theme(axis.title.y = element_text(hjust=0),
+                    legend.position = c(0.85, 0.25), 
+                    legend.title.align=1,
+                    legend.text.align = 1,
+                    legend.title = element_text(size=16),
+                    legend.text = element_text(size=12),
+                    #legend.key.size = unit(3,"line"),
+                    legend.key.width = unit(3,"cm")) + guides(#shape = guide_legend(override.aes = list(size=0),title.position = "top"),
+                                                              linetype = guide_legend(override.aes = list(size=1,color='black'))
+                                                              )
+# Now do this to make the symbol larger than the line thickness in the legend, wild!
+p0
+# This does something funky
+grid::grid.ls(grid::grid.force())
+
+# Set the size of the point in the legend to 2 mm
+grid::grid.gedit("key-[-0-9]-1-1", size = unit(4, "mm"))
+
+# save the modified plot to an object
+p.tidy <- grid::grid.grab()
+
+# Now the NW Atlantic stocks
+p1 <- ggplot(dat %>% dplyr::filter(Region == "Northwest Atlantic"),aes(y=rec.ssb, x= ssb,colour = Period,shape = Species,linetype = Species)) + geom_point(size=2) + 
+              facet_wrap(~ Location ,scales = 'free',ncol=3) + xlab("SSB (tonnes)") + ylab("")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + scale_y_log10() + 
+              geom_smooth(method = 'lm') + scale_x_continuous(limits = c(0,NA)) +
+#              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+#              geom_vline(xintercept = 1992.5, color ='grey',size=3)+
+              theme(legend.position = "none")
+# And combo them
+p.rec.per.ssb <- plot_grid(p.tidy,p1,nrow=2,rel_heights = c(2,1))
+```
+
+```{r rssb-ssb-plot, echo =F,fig.width=11,fig.height=11,message=F,fig.cap = "Recruits/SSB (log scale) vs SSB, Linear model fit on log(10) scale with Alpha calculated for pre 1993 and recent periods"}
+p.rec.per.ssb
+```
+
+
+\newpage
+
+
+**Now the S-R model with just the one period**
+
+```{r rssb-ssb-all-plot, echo =F,message=F,fig.width=11,fig.height=11,message=F,fig.cap = "Recruits/SSB (log scale) vs SSB, Linear model fit on log(10) scale with no differentiation between Periods.  Used for Residual analyses."}
+
+# Now the Rec/SSB vs SSB figure, with a line of best fit, not ugly at all....
+p0 <- ggplot(dat %>% dplyr::filter(Region == "Northeast Atlantic"),aes(y=rec.ssb, x= ssb,color=Species,shape = Species,linetype = Species)) + geom_point(size=2) + 
+              facet_wrap(~Location ,scales = 'free_x',ncol=3) + xlab("") + ylab("Recruits/SSB")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + scale_y_log10() + 
+              geom_smooth(method = 'lm') + scale_x_continuous(limits = c(0,NA)) +
+#              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+#              geom_vline(xintercept = 1992.5,color = "grey",size =2) + 
+              theme(axis.title.y = element_text(hjust=0),
+                    legend.position = c(0.85, 0.25), 
+                    legend.title.align=1,
+                    legend.text.align = 1,
+                    legend.title = element_text(size=16),
+                    legend.text = element_text(size=12),
+                    #legend.key.size = unit(3,"line"),
+                    legend.key.width = unit(3,"cm"))
+
+# Now the NW Atlantic stocks
+p1 <- ggplot(dat %>% dplyr::filter(Region == "Northwest Atlantic"),aes(y=rec.ssb, x= ssb,color = Species,linetype = Species,shape=Species)) + geom_point(size=2) + 
+              facet_wrap(~ Location ,scales = 'free',ncol=3) + xlab("SSB (tonnes)") + ylab("")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + scale_y_log10() + 
+              geom_smooth(method = 'lm') + scale_x_continuous(limits = c(0,NA)) +
+#              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+#              geom_vline(xintercept = 1992.5, color ='grey',size=3)+
+              theme(legend.position = "none")
+# And combo them
+p.rec.per.ssb.all <- plot_grid(p0,p1,nrow=2,rel_heights = c(2,1))
+p.rec.per.ssb.all
+```
+
+
+\newpage
+
+**Here are the GAM fits from the Recruit time series, GAMs were fit on the log scale**
+
+```{r gam-rec, message = F,warning=F,echo =F,fig.width=11,fig.height=11,fig.cap= "Recruitment (in millons) time series for 8 Atlantic Cod and Haddock stocks in the Atlantic Ocean.  The vertical grey line indicates the division between the two periods.  The lines are the GAM fits with 95//% CI in the shaded Region"}
+# Recruits vs SSB
+p0 <- ggplot(dat %>% dplyr::filter(Region == "Northeast Atlantic"),aes(y=recruits/1000, x= year,shape = Species,color=Species,linetype=Species)) + geom_point(size=2) + 
+              facet_wrap(~Location ,scales = 'free',ncol=3) + xlab("") + ylab("Recruits (Number in Millons)")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + scale_y_log10() + 
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+              geom_smooth(method = 'gam') + 
+              geom_vline(xintercept = 1992.5,color = "grey",size =2) + 
+              theme(axis.title.y = element_text(hjust=0),
+                    legend.position = c(0.85, 0.25), 
+                    legend.title.align=1,
+                    legend.text.align = 1,
+                    legend.title = element_text(size=16),
+                    legend.text = element_text(size=12),
+                    legend.key.width = unit(3,"cm")) + guides(colour = guide_legend(override.aes = list(size=1.5),title.position = "top"))
+
+# Now the NW Atlantic stocks
+p1 <- ggplot(dat %>% dplyr::filter(Region == "Northwest Atlantic"),aes(y=recruits/1000, x= year,shape = Species,color=Species,linetype=Species)) + geom_point(size=2) +
+              facet_wrap(~ Location ,scales = 'free',ncol=3) + xlab("Year") + ylab("")  + 
+              scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) + scale_y_log10() + 
+              geom_smooth(method = 'gam') + 
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+              geom_vline(xintercept = 1992.5, color ='grey',size=3)+
+              theme(legend.position = "none")
+
+p.rec.gam <- plot_grid(p0,p1,nrow=2,rel_heights = c(2,1))
+p.rec.gam
+```
+
+
+\newpage
+
+
+**We can make a correlation figure by region to if we want**
+
+```{r ccf-plot,message = F,warning=F,echo =F,fig.width=8,fig.height=8,fig.cap= "Correlation of recruitment time series for all Location."}
+
+p.ccf <- ggplot(data = dat.ccf,aes(x=lag,y=x.corr)) + facet_wrap(~Location) +
+              geom_bar(stat="identity",aes(fill=cat))+
+              scale_fill_manual(values=c("#339933","#cc0000"))+
+              ylab("Correlation")+
+              scale_y_continuous(limits=c(-1,1))+
+              theme(legend.position = "none", plot.title=element_text(size=10))
+p.ccf
+
+```
+
+
+\newpage
+
+**ACF figure for the full SR model residuals**
+
+```{r acf-sr-plot,message = F,warning=F,echo =F,fig.width=11,fig.height=11,fig.cap= "Autocorrelation of recruitment residuals from the full stock recruitment model for each stock."}
+
+p.acf.sr <- ggplot(data = acf.sr,aes(x=lag,y=acf)) + facet_wrap(~Stock) +
+              geom_bar(stat="identity",aes(fill=cat))+
+              scale_fill_manual(values=c("#339933","#cc0000"))+
+              ylab("Correlation")+
+              scale_y_continuous(limits=c(-1,1))+
+              theme(legend.position = "none", plot.title=element_text(size=10))
+p.acf.sr
+
+```
+
+
+\newpage
+
+** ACF figure for the GAM model residuals**
+
+```{r acf-gam-plot,message = F,warning=F,echo =F,fig.width=11,fig.height=11,fig.cap= "Autocorrelation of recruitment residuals from the GAMs for each stock."}
+
+p.acf.gam <- ggplot(data = acf.gam,aes(x=lag,y=acf)) + facet_wrap(~Stock) +
+              geom_bar(stat="identity",aes(fill=cat))+
+              scale_fill_manual(values=c("#339933","#cc0000"))+
+              ylab("Correlation")+
+              scale_y_continuous(limits=c(-1,1))+
+              theme(legend.position = "none", plot.title=element_text(size=10))
+p.acf.gam
+
+```
+
+\newpage
+
+**Here is Figure 2 from Fogarty, the Residual plot from the S-R models**
+
+```{r sr-resid-plot,warning =F,echo=F,fig.width=11,fig.height=11,message=F,fig.cap = "Residuals from the Ricker Stock recruitment model."}
+
+p <- ggplot(dat.all.mod %>% dplyr::filter(Region == "Northeast Atlantic"),aes(y=resids, x= year,colour = Period,linetype = Species)) +    
+              geom_line() + 
+              facet_wrap(~Location ,ncol=3,scales = 'free_y') + xlab("") + ylab("Residuals (S-R model)")  + 
+              scale_color_manual(values = cols)  + 
+              geom_hline(yintercept = 0, color='grey',linetype = 'dashed')+
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10),labels = NULL) +
+              theme(axis.title.y = element_text(hjust=0.25),
+                    legend.position = c(0.85, 0.25), 
+                    legend.title.align=1,
+                    legend.text.align = 1,
+                    legend.title = element_text(size=16),
+                    legend.text = element_text(size=12),
+                    #legend.key.size = unit(3,"line"),
+                    legend.key.width = unit(3,"cm")) 
+
+p1 <- ggplot(dat.all.mod %>% dplyr::filter(Region=="Northwest Atlantic"),aes(y=resids, x= year,colour = Period,linetype = Species)) +
+              geom_line() + geom_hline(yintercept = 0, color='grey',linetype = 'dashed')+
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+              facet_wrap(~Location ,ncol=3, scales = 'free_y') + xlab("Year") + ylab("")  + 
+              scale_color_manual(values = cols) + theme(legend.position = "none")
+
+sr.resid.plt <- plot_grid(p,p1,nrow=2,rel_heights = c(2,1))
+sr.resid.plt
+```
+
+
+\newpage
+
+**Here is the GAM residual plot, kind of Figure 2, but for the smoothed time series**
+
+```{r gam-resid-plot,echo=F,warning =F,fig.width=11,fig.height=11,message=F,fig.cap = "Recruit residuals from the GAM model."}
+
+p <- ggplot(dat.all.mod %>% dplyr::filter(Region == "Northeast Atlantic"),aes(y=gam.resids, x= year,colour = Period,linetype = Species)) +    
+              geom_line() + 
+              facet_wrap(~Location ,ncol=3,scales = 'free_y') + xlab("") + ylab("Residuals (GAM)")  + 
+              scale_color_manual(values = cols)  + 
+              geom_hline(yintercept = 0, color='grey',linetype = 'dashed')+
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10),labels = NULL) +
+              theme(axis.title.y = element_text(hjust=0.25),
+                    legend.position = c(0.85, 0.25), 
+                    legend.title.align=1,
+                    legend.text.align = 1,
+                    legend.title = element_text(size=16),
+                    legend.text = element_text(size=12),
+                    #legend.key.size = unit(3,"line"),
+                    legend.key.width = unit(3,"cm")) 
+
+p1 <- ggplot(dat.all.mod %>% dplyr::filter(Region=="Northwest Atlantic"),aes(y=gam.resids, x= year,colour = Period,linetype = Species)) +
+              geom_line() + geom_hline(yintercept = 0, color='grey',linetype = 'dashed')+
+              scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) +
+              facet_wrap(~Location ,ncol=3,scales = 'free_y') + xlab("Year") + ylab("")  + 
+              scale_color_manual(values = cols) + theme(legend.position = "none")
+
+gam.resid.plt <- plot_grid(p,p1,nrow=2,rel_heights = c(2,1))
+gam.resid.plt
+```
+
+
+
+
+
+
+<!-- **Table with the ACF values in it, both from SR and from GAM residuals ** -->
+
+<!-- ```{r, tab-acf,echo=F} -->
+
+<!-- print(tab.dat) -->
+<!-- ``` -->
+
+<!-- \newpage -->
+
+
+<!-- **Now lets get the Correlation between the time series, Figure 4** -->
+
+<!-- ```{r cross-cor,echo=F,fig.width=8,fig.height=8,message=F,fig.cap ="Cross correlation of the recruiment (log scale) time series"} -->
+
+<!-- p.cor <- ggplot(dat.cory,aes(y=Correlation,x=Location)) + geom_point(size=4) +  -->
+<!--               geom_errorbar(aes(ymin =lci,ymax=uci),width=0) +  -->
+<!--               geom_hline(yintercept = 0, linetype='dashed',color='grey') + -->
+<!--               theme(axis.text.x = element_text(angle = 45, hjust = 1.,size=16)) + xlab("") -->
+<!-- p.cor -->
+
+<!-- ``` -->
+
+
+
+
+
+<!-- ```{r fog-ssb-max, message=F,echo =F,fig.width=11,fig.height=11,fig.cap= "SSB (proportion of maximum SSB) time series for 8 Atlantic Cod (solid line) and Haddock (dashed line) stocks in the Atlantic Ocean.  The red line indicates data from the Pre 1993 Period, while the blue line is for the Recent Period. The vertical grey line indicates the division between the two periods"} -->
+<!-- # Recruits vs SSB -->
+<!-- p0 <- ggplot(dat %>% dplyr::filter(Region == "Northeast Atlantic")) + geom_line(aes(y=ssb.prop, x= year,colour = Period,linetype = Species)) +  -->
+<!--               facet_wrap(~Location ,scales = 'free',ncol=3) + xlab("") + ylab("Proportion of maximum Spawning Stock Biomass")  +  -->
+<!--               scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) +  -->
+<!--               scale_x_continuous(limits = c(1945,2020),breaks = seq(1950,2020,by=10)) + -->
+<!--               geom_vline(xintercept = 1992.5,color = "grey",size =2) +  -->
+<!--               theme(axis.title.y = element_text(hjust=-.25), -->
+<!--                     legend.position = c(0.85, 0.25),  -->
+<!--                     legend.title.align=1, -->
+<!--                     legend.text.align = 1, -->
+<!--                     legend.title = element_text(size=16), -->
+<!--                     legend.text = element_text(size=12), -->
+<!--                     legend.key.width = unit(3,"cm")) + guides(colour = guide_legend(override.aes = list(size=1.5),title.position = "top"), -->
+<!--                                                               linetype = guide_legend(override.aes = list(size=1.5))) -->
+
+<!-- # Now the NW Atlantic stocks -->
+<!-- p1 <- ggplot(dat %>% dplyr::filter(Region == "Northwest Atlantic")) + geom_line(aes(y=ssb.prop, x= year,colour = Period,linetype = Species)) +  -->
+<!--               facet_wrap(~ Location ,scales = 'free',ncol=3) + xlab("Year") + ylab("")  +  -->
+<!--               scale_color_manual(values = cols)  + scale_linetype_manual(values = lty) +  -->
+<!--               geom_vline(xintercept = 1992.5, color ='grey',size=3)+ -->
+<!--               theme(legend.position = "none") -->
+
+<!-- p.ssbp.ts <- plot_grid(p0,p1,nrow=2,rel_heights = c(2,1)) -->
+<!-- p.ssbp.ts -->
+<!-- ``` -->
+
+
+<!-- ```{r sr-alpha-plot,echo=F,fig.width=10,fig.height=10,message=F,fig.cap = "Estimated log(alpha) from Ricker Stock Recruitment models for each stock in the Pre 1993 and Recent period."} -->
+
+<!-- # This is super ugly.... -->
+<!-- dat.cur <- NULL;dat.past <- NULL -->
+<!-- for(i in 1:n.stocks) dat.cur[[stocks[i]]] <- dat.alpha[dat.alpha$Period == "Recent" & dat.alpha$Stock  == stocks[i],][1,] -->
+<!-- for(i in 1:n.stocks) dat.past[[stocks[i]]] <- dat.alpha[dat.alpha$Period == "Pre 1993" & dat.alpha$Stock  == stocks[i],][1,] -->
+
+<!-- dat.cur <- do.call('rbind',dat.cur) -->
+<!-- dat.past <- do.call('rbind',dat.past) -->
+<!-- dat.tmp <- rbind(dat.cur,dat.past) -->
+<!-- # Here we add in the SPR correction so we can make that figure. -->
+<!-- d.alp <- dat.tmp %>% dplyr::select(Species,Location,alpha,alpha.sd,LCI,UCI,Stock,Period) -->
+<!-- d.alp <- d.alp[!is.na(d.alp$Species),] -->
+<!-- d.had <- d.alp[d.alp$Species == "Haddock",] -->
+<!-- #d.had <- d.had[!is.na(d.had$Species),] -->
+
+<!-- d.cod <- d.alp[d.alp$Species == "Cod",] -->
+<!-- #d.cod <- d.cod[!is.na(d.cod$Species),] -->
+<!-- d.cod <- d.cod[!(d.cod$Location == "Irish Sea" & d.cod$Period == "Pre 1993"),] -->
+
+<!-- names(d.had) <- c("Species","Location","alpha.had","LCI.had","UCI.had",'Stock','Period') -->
+<!-- names(d.cod) <- c("Species","Location","alpha.cod","LCI.cod","UCI.cod",'Stock',"Period") -->
+<!-- d.merge <- data.frame(Location = d.had$Location,  -->
+<!--                       Period = d.had$Period, -->
+<!--                       alpha.had = d.had$alpha.had, -->
+<!--                       LCI.had = d.had$LCI.had, -->
+<!--                       UCI.had = d.had$UCI.had, -->
+<!--                       alpha.cod = d.cod$alpha.cod, -->
+<!--                       LCI.cod = d.cod$LCI.cod, -->
+<!--                       UCI.cod = d.cod$UCI.cod) -->
+<!-- # Order these like Fogarty -->
+<!-- d.merge$Location  <- factor(d.merge$Location, levels = c("North Sea","Irish Sea","Faroese","Barents Sea","Iceland","Eastern Scotian Shelf","Western Scotian Shelf","Eastern Georges Bank")) -->
+
+
+<!-- # SO this is the wrong figure, cause I want to make this plot using the SD of the residuals from the SR.   -->
+<!-- # But maybe I want to make a plot using these somehow.... -->
+<!-- cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey") -->
+<!-- shapes <- c(rep(21,4),rep(24,4)) -->
+<!-- alpha.plt <- ggplot(d.merge,aes(y = alpha.had,x=alpha.cod,fill = Location,shape = Location,color=Location)) +  -->
+<!--      geom_point(size=4) + facet_wrap(~Period,ncol=1) + -->
+<!--      geom_errorbar(aes(ymin=LCI.had,ymax=UCI.had)) + -->
+<!--      geom_errorbarh(aes(xmin = LCI.cod,xmax=UCI.cod)) + -->
+<!--      scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) + -->
+<!--      geom_abline(slope=1,intercept = 0) +  -->
+<!--      xlab("Cod log(alpha)") + ylab("Haddock log(alpha)") +  -->
+<!--      theme(legend.title = element_blank(),legend.position = 'top') -->
+<!-- alpha.plt -->
+
+<!-- ``` -->
+
+<!-- \newpage -->
+
+
+<!-- *Same figure as above, but only using data in which we have overlapping years of data between the stocks in a given Location* -->
+
+<!-- ```{r sd-ts-same-resid-sr,echo=F,warning=F,fig.width=10,fig.height=10,message=F,fig.cap = "Standard deviation of the log residuals from the Ricker S-R Model but using residuals only from years in which data is found in both time series."} -->
+
+<!-- sds.cod.sr <- dat.trim.mod %>% dplyr::filter(Species == 'Cod') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(resids)) -->
+<!-- # Toss Irish Sea Pre 1993 because we don't have a match with Haddock. -->
+<!-- sds.cod.sr <- sds.cod.sr[!(sds.cod.sr$Location == "Irish Sea" & sds.cod.sr$Period == "Pre 1993"),] -->
+<!-- sds.had.sr <- dat.trim.mod %>% dplyr::filter(Species == 'Haddock') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(resids)) -->
+<!-- names(sds.cod.sr) <- c("Location","Period","sd.cod") -->
+<!-- names(sds.had.sr) <- c("Location","Period","sd.had") -->
+<!-- # Reorder the Locations to match (or come close to matching) Fogarty -->
+<!-- dat.sds.sr <- left_join(sds.cod.sr,sds.had.sr,by = c("Location","Period")) -->
+
+<!-- cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey") -->
+<!-- shapes <- c(rep(21,4),rep(24,4)) -->
+<!-- p.sds.ts.same <- ggplot(dat.sds.sr, aes(x=sd.cod,y=sd.had,fill = Location,shape = Location,color=Location)) + -->
+<!--             geom_point(size=4) + facet_wrap(~Period,ncol=1) +  -->
+<!--             geom_abline(slope=1,intercept = 0) + scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) + -->
+<!--             xlab("Cod Residual SD (S-R model)") + ylab("Haddock Residual SD (S-R model)") + -->
+<!--             scale_x_continuous(limits=c(0.1,1.7)) + scale_y_continuous(limits=c(0.1,1.7)) + theme(legend.title = element_blank(),legend.position = 'top') -->
+<!-- p.sds.ts.same -->
+
+<!-- ``` -->
+
+
+<!-- \newpage -->
+
+
+
+
+<!-- **Same figure as above, but only using data in which we have overlapping years of data between the stocks in a given Location** -->
+
+<!-- ```{r sd-ts-same-resid-gam,echo=F,warning=F,fig.width=10,fig.height=10,message=F,fig.cap = "Standard deviation of the log residuals from the GAMs but using residuals only from years in which data is found in both time series."} -->
+
+<!-- sds.cod.gam <- dat.trim.mod %>% dplyr::filter(Species == 'Cod') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(gam.resids)) -->
+<!-- # Toss Irish Sea Pre 1993 because we don't have a match with Haddock. -->
+<!-- sds.cod.gam <- sds.cod.gam[!(sds.cod.gam$Location == "Irish Sea" & sds.cod.gam$Period == "Pre 1993"),] -->
+<!-- sds.had.gam <- dat.trim.mod %>% dplyr::filter(Species == 'Haddock') %>% dplyr::group_by(Location,Period) %>% dplyr::summarise(sd = sd(gam.resids)) -->
+<!-- names(sds.cod.gam) <- c("Location","Period","sd.cod") -->
+<!-- names(sds.had.gam) <- c("Location","Period","sd.had") -->
+
+<!-- dat.sds.gam <- left_join(sds.cod.gam,sds.had.gam,by = c("Location","Period")) -->
+
+<!-- cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey") -->
+<!-- shapes <- c(rep(21,4),rep(24,4)) -->
+
+<!-- p.sds.gam.ts.same <- ggplot(dat.sds.gam, aes(x=sd.cod,y=sd.had,fill = Location,shape = Location,color=Location)) +  -->
+<!--             geom_point(size=4) + facet_wrap(~Period,ncol=1) +  -->
+<!--             geom_abline(slope=1,intercept = 0) + scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) + -->
+<!--             xlab("Cod Residual SD (GAM)") + ylab("Haddock Residual SD (GAM)") + -->
+<!--             scale_x_continuous(limits=c(0.1,2)) + scale_y_continuous(limits=c(0.1,2)) + -->
+<!--             theme(legend.title = element_blank(),legend.position = 'top') -->
+<!-- p.sds.gam.ts.same -->
+
+<!-- ``` -->
+
+\newpage
+
+
+
+
+
+
+<!-- **"Alpha" using the mean of the log(Rec/SSB) for SSB of <= 0.2 of maximum SSB** -->
+
+<!-- ```{r, alpha-20-plt,echo=F,message =F, warning =F,fig.width=10,fig.height=10,message=F,fig.cap = "The mean log(Rec/SSB) when SSB is <= 0.2 of maximum ssb"} -->
+<!-- alpha.20.plt <- ggplot(dat.20.alpha,aes(y = alpha.20.had,x=alpha.20.cod,fill = Location,shape = Location,color=Location)) +  -->
+<!--      geom_point(size=4) + facet_wrap(~Period,ncol=1) + -->
+<!--      geom_errorbar(aes(ymin=lci.20.had,ymax=uci.20.had)) + -->
+<!--      geom_errorbarh(aes(xmin = lci.20.cod,xmax=uci.20.cod)) + -->
+<!--      scale_fill_manual(values = cols)+ scale_color_manual(values = cols)+scale_shape_manual(values = shapes) + -->
+<!--      geom_abline(slope=1,intercept = 0) +  -->
+<!--      xlab("Cod mean(log(rec/ssb)) for ssb < 0.2 of max") + ylab("Haddock mean(log(rec/ssb)) for ssb < 0.2 of max") +  -->
+<!--      theme(legend.title = element_blank(),legend.position = 'top') -->
+<!-- alpha.20.plt -->
+
+<!-- ``` -->
+
+
+<!-- \newpage -->
