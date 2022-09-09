@@ -526,7 +526,7 @@ p1 <- ggplot(dat %>% dplyr::filter(Region == "Northwest Atlantic")) + geom_line(
 
 p.ssb.ts <- plot_grid(p0,p1,nrow=2,rel_heights = c(2,1))
 p.ssb.ts
-save_plot("D:/Github/Haddock/Results/Figure_1.png",p.ssb.ts,base_height = 8,base_width = 11)
+save_plot("D:/Github/Haddock/Results/Figure_1.png",p.ssb.ts,base_height = 8,base_width = 11,dpi=600)
 ```
 
 
@@ -557,7 +557,7 @@ p1 <- ggplot(dat %>% dplyr::filter(Region == "Northwest Atlantic")) + geom_line(
 
 p.rec.ts <- plot_grid(p0,p1,nrow=2,rel_heights = c(2,1))
 p.rec.ts
-save_plot("D:/Github/Haddock/Results/Figure_2.png",p.rec.ts,base_height = 8,base_width = 11)
+save_plot("D:/Github/Haddock/Results/Figure_2.png",p.rec.ts,base_height = 8,base_width = 11,dpi=600)
 
 ```
 
@@ -587,7 +587,7 @@ p1 <- ggplot(dat %>% dplyr::filter(Region == "Northwest Atlantic")) + geom_line(
 
 p.rssb.ts <- plot_grid(p0,p1,nrow=2,rel_heights = c(2,1))
 p.rssb.ts
-save_plot("D:/Github/Haddock/Results/Figure_3_new.png",p.rssb.ts,base_height = 8,base_width = 11)
+save_plot("D:/Github/Haddock/Results/Figure_3.png",p.rssb.ts,base_height = 8,base_width = 11,dpi=600)
 
 ```
 
@@ -614,7 +614,7 @@ p.ccf.split <- ggplot(dat.ccf.split,aes(y=Correlation,x=Location,fill = Location
                   theme(axis.text.x = element_text(angle = 45, hjust = 1.,size=16), 
                         legend.title = element_blank(),legend.position = 'none') + xlab("")
 p.ccf.split
-save_plot("D:/Github/Haddock/Results/Figure_4_new.png",p.ccf.split,base_height = 10, base_width = 14)
+save_plot("D:/Github/Haddock/Results/Figure_4.png",p.ccf.split,base_height = 10, base_width = 14,dpi=600)
 
 ```
 
@@ -666,7 +666,7 @@ p.sds.gam <- ggplot(dat.sds.gam, aes(x=sd.cod,y=sd.had,fill = Location,shape = L
 
 p.sds.combo <- plot_grid(p.sds,p.sds.gam,rel_widths = c(3,4.65))
 p.sds.combo
-save_plot("D:/Github/Haddock/Results/Figure_5_new.png",p.sds.combo,base_height = 8,base_width =11)
+save_plot("D:/Github/Haddock/Results/Figure_5.png",p.sds.combo,base_height = 8,base_width =11,dpi=600)
 
 ```
 
@@ -717,7 +717,7 @@ p.acf.split.sr <- ggplot(dat.acf.split %>% dplyr::filter(Model == "Stock Recruit
                       legend.title = element_blank(),legend.position = 'none') + xlab("")
 p.acf.split.sr
 
-save_plot("D:/Github/Haddock/Results/Figure_6_new.png",p.acf.split.sr,base_height = 10,base_width = 20)
+save_plot("D:/Github/Haddock/Results/Figure_S4.png",p.acf.split.sr,base_height = 10,base_width = 20,dpi=600)
 
 
 ```
@@ -805,7 +805,7 @@ alpha.40.plt <- ggplot(dat.40.alpha,aes(y = alpha.40.had,x=alpha.40.cod,fill = L
 alpha.plt <- plot_grid(alpha.stan.plt,alpha.40.plt,rel_widths = c(3,4.65))
 alpha.plt
 
-save_plot("D:/Github/Haddock/Results/Figure_7_new.png",alpha.plt,base_height = 8,base_width = 11)
+save_plot("D:/Github/Haddock/Results/Figure_6.png",alpha.plt,base_height = 8,base_width = 11,dpi=600)
 
 
 ```
@@ -863,6 +863,7 @@ diff.alpha.40 <- dat.40.alpha %>% dplyr::group_by(Location) %>% dplyr::summarise
 cols <- c("blue","firebrick2","green","grey","blue","firebrick2","green","grey")
 shapes <- c(rep(21,4),rep(24,4))
 tag <- data.frame(lab = c("(c)"),Location = "North Sea")
+diff.alpha$Location[is.na(diff.alpha$Location)] <- "Irish Sea"
 
 
 
@@ -897,7 +898,7 @@ diff.plt <- plot_grid(diff.sr.plt,diff.gam.plt,
 diff.plt
 
 
-save_plot("D:/Github/Haddock/Results/Figure_X_Diff_plots.png",diff.plt,base_height = 11,base_width =11)
+save_plot("D:/Github/Haddock/Results/Figure_7.png",diff.plt,base_height = 11,base_width =11,dpi=600)
 
 ```
 
@@ -913,7 +914,7 @@ p.freq <- ggplot(data = dat.all.mod) + geom_freqpoly(aes(x = ssb.prop,color=Peri
               xlab("Proportion of Max SSB")
 p.freq
 
-save_plot("D:/Github/Haddock/Results/Figure_8.png",p.freq,base_height = 9,base_width = 12)
+save_plot("D:/Github/Haddock/Results/Figure_S2.png",p.freq,base_height = 9,base_width = 12,dpi=600)
 
 ```
 
@@ -973,7 +974,7 @@ p.acf.split.gam <- ggplot(dat.acf.split %>% dplyr::filter(Model == "GAM"),
 p.acf.split.gam
 
 
-save_plot("D:/Github/Haddock/Results/Figure_A1_new.png",p.acf.split.gam,base_height = 10,base_width = 20)
+save_plot("D:/Github/Haddock/Results/Figure_S5.png",p.acf.split.gam,base_height = 10,base_width = 20,dpi=600)
 
 
 ```
@@ -1002,7 +1003,7 @@ sr.pd.resid.plt <- ggplot(dat.all.mod ,aes(x=resids, fill =  Species)) +
 
 
 sr.pd.resid.plt
-save_plot(plot = sr.pd.resid.plt,filename = "D:/Github/Haddock/Results/Figure_A2.png",base_height = 8.5,base_width =11)
+save_plot(plot = sr.pd.resid.plt,filename = "D:/Github/Haddock/Results/Figure_S3.png",base_height = 8.5,base_width =11,dpi=600)
 
 ```
 
@@ -1227,7 +1228,7 @@ p.sds.gam <- ggplot(dat.sds.gam, aes(x=sd.cod,y=sd.had,fill = Location,shape = L
 
 p.sds.combo.app <- plot_grid(p.sds,p.sds.gam,rel_widths = c(3,4.65))
 p.sds.combo.app
-save_plot("D:/Github/Haddock/Results/Figure_sds_appendix.png",p.sds.combo.app,base_height = 8,base_width =11)
+save_plot("D:/Github/Haddock/Results/Figure_S6.png",p.sds.combo.app,base_height = 8,base_width =11,dpi=600)
 ```
 
 
@@ -1294,7 +1295,7 @@ alpha.plt <- ggplot(d.merge,aes(y = alpha.had,x=alpha.cod,fill = Location,shape 
 alpha.plt
 
 
-save_plot("D:/Github/Haddock/Results/Figure_alpha_appendix.png",alpha.plt,base_height = 8,base_width = 8)
+save_plot("D:/Github/Haddock/Results/Figure_S7.png",alpha.plt,base_height = 8,base_width = 8,dpi=600)
 
 
 ```
