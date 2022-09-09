@@ -613,8 +613,11 @@ p.ccf.split <- ggplot(dat.ccf.split,aes(y=Correlation,x=Location,fill = Location
                   geom_errorbar(aes(ymin =lci,ymax=uci),width=0,position = position_dodge(width =0.5)) + 
                   theme(axis.text.x = element_text(angle = 45, hjust = 1.,size=16), 
                         legend.title = element_blank(),legend.position = 'none') + xlab("")
+                        #legend.title = element_blank(),legend.position = 'top') + xlab("")
+
 p.ccf.split
 save_plot("D:/Github/Haddock/Results/Figure_4.png",p.ccf.split,base_height = 10, base_width = 14,dpi=600)
+#save_plot("D:/Github/Haddock/Results/Figure_4_with_legend.png",p.ccf.split,base_height = 10, base_width = 14,dpi=600)
 
 ```
 
